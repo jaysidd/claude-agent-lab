@@ -3,11 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-9_passing-6ee7b7)](./tests)
+[![Tests](https://img.shields.io/badge/tests-21_passing-6ee7b7)](./tests)
 
-A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four specialized agents in a browser UI, each with its own system prompt, tool allowlist, and model. A router agent that delegates to specialists. A task board with Haiku-powered auto-routing. Token-by-token streaming. Folder scoping. `@file` autocomplete.
+A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. Task board with Haiku-powered auto-routing. Token-by-token streaming. Folder scoping. `@file` and `/command` autocomplete. Persistent SQLite memory. Settings UI for integrations. Voice I/O via [WhisprDesk](https://whisprdesk.com/).
 
-All in ~1,800 lines of hand-written code — because most of the work is already inside the SDK.
+All in ~2,200 lines of hand-written code — because most of the work is already inside the SDK.
 
 ![Command Center — overview](docs/screenshots/01-overview.png)
 
@@ -32,6 +32,7 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | Feature | SDK primitive |
 |---|---|
 | [Multi-agent sidebar](#multi-agent-sidebar) | `systemPrompt`, `allowedTools` per call |
+| [Custom agents (CRUD)](#custom-agents-crud) | SQLite-backed registry merged with built-ins at runtime |
 | [Sub-agent delegation](#sub-agent-delegation) | `agents: Record<string, AgentDefinition>` + `Agent` tool |
 | [Token-by-token streaming](#token-by-token-streaming) | `includePartialMessages: true` → `stream_event` messages |
 | [Folder scoping](#folder-scoping) | `cwd` |
@@ -39,9 +40,9 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Task queue with auto-routing](#task-queue-with-auto-routing) | One-shot Haiku `query()` as a classifier |
 | [Markdown rendering](#markdown-rendering) | Not SDK — `marked` + `DOMPurify` + `highlight.js` on completed replies |
 | [Persistent memory (SQLite)](#persistent-memory-sqlite) | Injected into `systemPrompt` on every call |
-| [Slash commands](#slash-commands) | Client-side interception before POST |
+| [Settings panel](#settings-panel) | DB-backed config with env-var fallback |
+| [Slash commands + autocomplete](#slash-commands) | Client-side interception + live popover |
 | [Plan mode toggle](#plan-mode-toggle) | `permissionMode: 'plan'` |
-| [File checkpointing](#file-checkpointing) | `enableFileCheckpointing: true` (snapshots enabled; UI rewind pending) |
 | [Voice in/out via WhisprDesk](#voice-in--out-via-whisprdesk) | Not SDK — proxy to local WhisprDesk gateway + browser `SpeechSynthesis` |
 | [Abort on client disconnect](#abort-on-client-disconnect) | `abortController: AbortController` |
 | [Multi-turn per agent](#multi-turn-per-agent) | `resume: sessionId` captured from `system.init` |
@@ -51,14 +52,29 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 
 ### Multi-agent sidebar
 
-Four agents, each defined by a ~20-line object in [`src/agents.ts`](src/agents.ts): `systemPrompt`, `allowedTools`, `model`, and a bit of UI metadata (emoji, accent color). Click an agent → chat with them. Each agent keeps its own conversation.
+Four built-in specialists, each defined by a ~20-line object in [`src/agents.ts`](src/agents.ts): `systemPrompt`, `allowedTools`, `model`, and UI metadata (emoji, accent). Click one → chat. Each agent keeps its own conversation with its own session ID.
 
 - **🧭 Main** — triage + router, no direct tools
 - **✉️ Comms** — drafts messages, `WebFetch`
-- **🎬 Content** — YouTube / long-form writing, `WebSearch` + `WebFetch`, **Opus 4.7** (creative work gets the best model)
+- **🎬 Content** — YouTube / long-form writing, `WebSearch` + `WebFetch`, **Opus 4.7**
 - **⚙️ Ops** — reads local files in the selected folder, `Read` / `Glob` / `Grep`, read-only
 
-Adding a fifth is one object in `agents.ts` — no server changes needed.
+The bottom of the sidebar has a prominent gradient **+ New agent** button — spawning specialists is a first-class operation, not a hidden escape hatch.
+
+---
+
+### Custom agents (CRUD)
+
+![New agent editor](docs/screenshots/12-new-agent-editor.png)
+
+Click **+ New agent** to open a full editor: name, emoji, accent color, one-line description, default model, tool checkboxes (all 12 SDK-known tools), router flag, and system prompt. Saves to SQLite (`data/lab.db`) and merges with the built-ins at runtime via a unified agent registry.
+
+- **Edit** any custom agent via the ✎ that appears on hover in the sidebar
+- **Delete** via the same editor (built-ins are read-only — they return 400 on PATCH/DELETE)
+- Custom agents participate in **everything**: streaming, sessions, memory injection, folder scoping, plan mode, sub-agent delegation. If you flag one as a router, Main's delegation list grows to include it
+- Agent id is slug-generated from the name; collision-resolved automatically
+
+Your Main/Comms/Content/Ops defaults stay in TypeScript (you can edit them there). Anything you spawn from the UI goes in SQLite. Best of both: version-controlled baseline + user-editable extras.
 
 ---
 
@@ -166,15 +182,20 @@ Context:
 
 ### Slash commands
 
-Type `/` as the first character and the client-side dispatcher handles it without a server round-trip:
+![Slash command autocomplete popover](docs/screenshots/11-slash-popover.png)
+
+Type `/` and a **live autocomplete popover** appears above the composer — same interaction model as the `@file` popover. ↑↓ to navigate, Tab to complete, Enter to run, Escape to dismiss. Narrows as you type (`/th` → 3 `/think` variants).
 
 | Command | Effect |
 |---|---|
 | `/help` | List all commands |
-| `/clear` | New conversation with this agent (same as header button) |
+| `/clear` | New conversation with this agent |
+| `/agents` | List all agents with their descriptions and default models |
 | `/model` | Show current model + available options |
 | `/model <id>` | Switch model for this agent. Aliases: `opus`, `sonnet`, `haiku` |
-| `/agents` | List all agents with their descriptions and default models |
+| `/think hard` | Ergonomic alias: switch to Opus 4.7 (careful reasoning) |
+| `/think fast` | Alias: switch to Haiku 4.5 (snappy, cheap) |
+| `/think default` | Reset to the agent's configured default |
 | `/plan on\|off` | Toggle plan mode for this agent |
 
 Output renders as a system-origin message in the chat log with full markdown formatting.
@@ -189,32 +210,45 @@ Per-agent state. Switching plan mode clears that agent's session (the SDK treats
 
 ---
 
-### File checkpointing
+### Settings panel
 
-`enableFileCheckpointing: true` is set on every `query()` call. The SDK now **snapshots files before any Edit/Write** so they can be restored. The UI "roll back to this turn" affordance is on the backlog — the snapshot infrastructure is already live as of this version, so when rewind ships you'll be able to rewind turns that happened today.
+![Settings modal](docs/screenshots/10-settings-modal.png)
+
+A ⚙️ **Settings** button in the header opens a modal backed by a SQLite `settings` table (`key`, `value`, `is_secret`, `updated_at`). Every integration surfaces here instead of being hidden behind `.env` edits. Current sections:
+
+- **WhisprDesk** — Gateway URL + Bearer token + live **Test connection** button
+- **Telegram bridge** *(coming soon)* — the fields render with a disabled state and a "coming soon" badge until the C05 bridge ships; saving is deliberately blocked so no one gets the broken-promise experience
+
+Secrets never round-trip to the browser: the UI shows a masked preview (`••••c123`), leaving a secret field blank keeps the existing value, and the raw token stays server-side for every proxied request. Values saved in the DB override matching env vars automatically — you can still paste tokens into `.env` for headless deploys.
 
 ---
 
 ### Voice in / out via WhisprDesk
 
-If you have [WhisprDesk](https://github.com/jaysidd/WhisprDesk) running locally (a personal Whisper-based dictation app by the same author), Command Center integrates with it in two ways:
+If you have [**WhisprDesk**](https://whisprdesk.com/) running locally, Command Center integrates with it in three ways out of the box:
+
+![Command Center overview showing the WhisprDesk status indicator](docs/screenshots/01-overview.png)
 
 **Active mode (mic button):** A 🎤 button next to Send records audio via `MediaRecorder`, POSTs the blob to `POST /api/whisprdesk/transcribe` (server-side proxy that adds the Bearer header), and drops the transcript into the composer.
 
-**Passive mode (SSE listener):** When configured, the server subscribes to WhisprDesk's `/v1/events` SSE stream. Any dictation you do *anywhere* on your machine via WhisprDesk's native push-to-talk shortcut — if Command Center is the focused tab — auto-fills the composer. You keep your existing dictation muscle memory and never touch the browser mic.
+**Passive mode (SSE listener):** The server subscribes to WhisprDesk's `/v1/events` stream. Any dictation you do *anywhere* on your Mac via WhisprDesk's native push-to-talk shortcut — as long as Command Center is the focused tab — auto-fills the composer. You keep the muscle memory; the lab just steals the transcript.
 
-**Voice out:** Each agent reply gets a 🔊 button in its footer that uses the browser's built-in `SpeechSynthesis` API to read the reply aloud. Click again to stop.
+**Voice out:** Each agent reply gets a 🔊 button that uses the browser's built-in `SpeechSynthesis` API to read the reply aloud. Click again to stop.
 
-**Setup.** Copy the Bearer token from WhisprDesk's Settings → *External App Gateway* card into your `.env`:
+**Setup.** Open ⚙️ **Settings** → WhisprDesk section → paste the Bearer token from WhisprDesk's *External App Gateway* card → Save. The sidebar footer flips from `WhisprDesk · off` to `· ready` within a second. The 🎤 button enables. No restart needed.
 
-```
-WHISPRDESK_URL=http://127.0.0.1:9879
-WHISPRDESK_TOKEN=paste-bearer-token-here
-```
-
-Restart the server. The footer of the sidebar shows `WhisprDesk · ready` when the proxy is live and WhisprDesk is reachable, `· unreachable` if it's configured but offline, or `· off` if no token is configured.
-
-**Why this architecture.** Whisper is the best open-source STT available; running it locally means audio never leaves your machine. Rather than re-embedding Whisper in Command Center, we lean on WhisprDesk's existing gateway — one install, two apps sharing it. The token stays server-side; the browser only sees the proxy.
+> ### 🎙 Don't have WhisprDesk yet?
+>
+> **WhisprDesk** is a local-first macOS dictation app built on the same open-source Whisper engine OpenAI released. It runs entirely on your Mac — audio never leaves the machine — and gives you a system-wide push-to-talk shortcut that works in any text field across any app.
+>
+> - 🔒 **Local-only** — no cloud, no accounts, no telemetry
+> - ⚡ **Real-time** — transcription lands as you speak
+> - 🧩 **Open gateway** — the same External App Gateway Command Center uses, so any app you write can plug in
+> - 💲 **One-time $29** — no subscription, no seat pricing, lifetime updates
+>
+> **→ Grab it at [whisprdesk.com](https://whisprdesk.com/)**
+>
+> *Disclosure: WhisprDesk is by the same author as this lab. Full disclosure and worth saying explicitly: the integration in this README works with any future Whisper-exposing HTTP gateway that matches the shape — it's not proprietary lock-in. WhisprDesk is just the cleanest shipped one I know of.*
 
 ---
 
@@ -621,9 +655,10 @@ This repo is **not** a product. If you turn it into one, switch to API keys and 
 
 ## What's on the backlog
 
-The current implementation covers F1–F7 foundation + C01–C11 and partial C12 (checkpointing infra). See [`backlog.md`](backlog.md) for the full sequential list. Top candidates for the next sessions:
+The current implementation covers F1–F7 foundation + C01–C15 (streaming, delegation, tasks, markdown, memory, slash commands + popover, plan mode, WhisprDesk, Settings, custom agents). See [`backlog.md`](backlog.md) for the full sequential list. Top candidates for the next sessions:
 
-- **File rewind UI** (C12 completion) — the `enableFileCheckpointing: true` infrastructure is already live; what's missing is persisting the Query object across requests via streaming-input mode so `rewindFiles(userMessageId)` can be called on-demand. Needs a session-model refactor.
+- **C05 Telegram bridge** — Settings fields are already live (disabled pending code). Need: long-poll listener, allowlist enforcement, routing to selected agent. Unblocks "agents on your phone."
+- **C12 File rewind UI** — requires refactoring the chat lifecycle to streaming-input mode so the SDK `Query` object stays alive across requests and `Query.rewindFiles(userMessageId)` can be invoked from a button on each user message.
 - **Cost & token tracking** — read usage from the SDK's `ResultMessage` and surface per-turn + session-total token/cost.
 - **Telegram / Discord bridge** — same engine, additional interface; pairs with slash commands already in place.
 - **Session history sidebar** — persist conversations across restarts (memory exists, chats don't yet).
@@ -655,7 +690,8 @@ The six-role dev-team convention the repo uses (Architect → Developer → Revi
 ## Acknowledgements
 
 - **Anthropic** for the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) and for making `@anthropic-ai/claude-agent-sdk` open and approachable.
-- The YouTuber who demonstrated a command-center pattern on top of OpenCode and got me thinking about how thin this layer could actually be when Claude is the target model.
+- **[WhisprDesk](https://whisprdesk.com/)** — the one-time-$29 local Whisper dictation app that Command Center's voice layer integrates with. Audio stays on your Mac; the gateway pattern means *any* app on your machine can share the STT pipeline.
+- The YouTuber who demonstrated a command-center pattern on top of OpenClaw and got me thinking about how thin this layer could actually be when Claude is the target model.
 - [OpenCode](https://github.com/sst/opencode) for being the right answer to "what if I need multi-provider?"
 
 ---
