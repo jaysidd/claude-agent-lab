@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import os from "node:os";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { AGENTS, AGENT_LIST, MODELS } from "./agents.js";
+import { AGENTS, AGENT_LIST, MODELS, subAgentsFor } from "./agents.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
@@ -136,6 +136,7 @@ app.post("/api/chat", async (req, res) => {
   let apiKeySource: string | undefined;
 
   try {
+    const subAgents = subAgentsFor(agent.id);
     for await (const msg of query({
       prompt: message,
       options: {
@@ -144,6 +145,7 @@ app.post("/api/chat", async (req, res) => {
         resume: resumeId,
         cwd: currentCwd,
         model: modelId,
+        ...(subAgents ? { agents: subAgents } : {}),
       },
     })) {
       const anyMsg = msg as any;

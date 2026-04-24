@@ -133,8 +133,17 @@ function renderMessages() {
       chips.className = "tool-chips";
       for (const t of m.toolUses) {
         const chip = document.createElement("span");
-        chip.className = "tool-chip";
-        chip.textContent = `🔧 ${t.name}`;
+        if (t.name === "Agent") {
+          const sub =
+            (t.input && (t.input.subagent_type || t.input.agent || t.input.name)) || "specialist";
+          const agent = state.agents.find((a) => a.id === sub);
+          const label = agent ? `${agent.emoji} ${agent.name}` : sub;
+          chip.className = "tool-chip delegation-chip";
+          chip.textContent = `🤝 delegated to ${label}`;
+        } else {
+          chip.className = "tool-chip";
+          chip.textContent = `🔧 ${t.name}`;
+        }
         chips.appendChild(chip);
       }
       row.appendChild(chips);

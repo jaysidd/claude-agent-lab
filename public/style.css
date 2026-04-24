@@ -285,6 +285,12 @@ body {
   padding: 2px 10px;
   font-family: "SF Mono", Menlo, monospace;
 }
+.tool-chip.delegation-chip {
+  color: var(--text);
+  background: linear-gradient(90deg, rgba(139,158,255,0.15), rgba(110,231,183,0.10));
+  border-color: rgba(139,158,255,0.35);
+  font-family: inherit;
+}
 
 .thinking {
   color: var(--muted);
