@@ -37,6 +37,11 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Folder scoping](#folder-scoping) | `cwd` |
 | [Per-agent model selection](#per-agent-model-selection) | `model: "claude-opus-4-7" \| "claude-sonnet-4-6" \| "claude-haiku-4-5"` |
 | [Task queue with auto-routing](#task-queue-with-auto-routing) | One-shot Haiku `query()` as a classifier |
+| [Markdown rendering](#markdown-rendering) | Not SDK — `marked` + `DOMPurify` + `highlight.js` on completed replies |
+| [Persistent memory (SQLite)](#persistent-memory-sqlite) | Injected into `systemPrompt` on every call |
+| [Slash commands](#slash-commands) | Client-side interception before POST |
+| [Plan mode toggle](#plan-mode-toggle) | `permissionMode: 'plan'` |
+| [File checkpointing](#file-checkpointing) | `enableFileCheckpointing: true` (snapshots enabled; UI rewind pending) |
 | [Abort on client disconnect](#abort-on-client-disconnect) | `abortController: AbortController` |
 | [Multi-turn per agent](#multi-turn-per-agent) | `resume: sessionId` captured from `system.init` |
 | [`@file` autocomplete](#file-autocomplete) | Not SDK — plain filesystem read + UI glue |
@@ -115,6 +120,77 @@ Auto-routing accepts an optional `agentId` override if you'd rather pick the spe
 Type `@` in the composer. A dropdown appears with files in the current `cwd`, filterable, keyboard-navigable (↑/↓, Enter, Esc). Selecting inserts `` `filename` `` into the prompt, which Ops (with `Read` in its allowlist) will then open.
 
 Not an SDK feature — just `fs.readdir` on the server and a tiny popover in `public/app.js`. Included to show how naturally the SDK composes with normal web UI plumbing.
+
+---
+
+### Markdown rendering
+
+![Slash command output rendered as markdown](docs/screenshots/09-slash-command.png)
+
+Agent replies are rendered as **sanitized markdown** once streaming completes — bold/italic, lists, tables, syntax-highlighted code blocks, blockquotes, links (external links open in a new tab). During live streaming the bubble stays plain text to avoid parsing markdown on every delta; on `done` we swap in the markdown HTML.
+
+Three libraries, all via jsDelivr CDN so there's no build step:
+- [`marked`](https://marked.js.org) — parser
+- [`DOMPurify`](https://github.com/cure53/DOMPurify) — sanitizer (prevents XSS from any HTML the model emits)
+- [`highlight.js`](https://highlightjs.org) — code block syntax highlighting (github-dark theme)
+
+User messages stay plain text. System-origin messages (slash-command output, memory injections) use the same renderer for parity.
+
+---
+
+### Persistent memory (SQLite)
+
+![Memory panel](docs/screenshots/08-memory-panel.png)
+
+Facts, preferences, and context that should survive restarts. Stored in `./data/lab.db` (gitignored) via [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3). Memories can be:
+
+- **Global** (all agents) or **scoped to one agent**
+- Categorized as `fact`, `preference`, or `context`
+- Added from the Memory panel (header button) or via API
+
+On every `query()` call the server pulls memories relevant to the active agent and appends them to the system prompt as a `<persistent-memory>` block, capped at ~2,000 characters to stay in budget. Specialist and router agents both see them.
+
+```
+<persistent-memory>
+Preferences:
+- Prefers short, direct replies — no preamble, no filler.
+Facts:
+- Name: Jay. Company: Clawless. Closes emails with '— J'.
+Context:
+- Building Command Center as an educational reference for the Agent SDK.
+</persistent-memory>
+```
+
+---
+
+### Slash commands
+
+Type `/` as the first character and the client-side dispatcher handles it without a server round-trip:
+
+| Command | Effect |
+|---|---|
+| `/help` | List all commands |
+| `/clear` | New conversation with this agent (same as header button) |
+| `/model` | Show current model + available options |
+| `/model <id>` | Switch model for this agent. Aliases: `opus`, `sonnet`, `haiku` |
+| `/agents` | List all agents with their descriptions and default models |
+| `/plan on\|off` | Toggle plan mode for this agent |
+
+Output renders as a system-origin message in the chat log with full markdown formatting.
+
+---
+
+### Plan mode toggle
+
+A checkbox in the header flips the active agent into the SDK's `permissionMode: 'plan'` — tool calls are **classified as they'd run but not actually executed**. Great for exploring what Ops *would* do before letting it do it. Also useful as a destructive-action safety net: enable plan on Content or Ops, ask the hard question, read the plan, then disable plan and rerun if the plan looks right.
+
+Per-agent state. Switching plan mode clears that agent's session (the SDK treats plan vs. execute as different context semantics).
+
+---
+
+### File checkpointing
+
+`enableFileCheckpointing: true` is set on every `query()` call. The SDK now **snapshots files before any Edit/Write** so they can be restored. The UI "roll back to this turn" affordance is on the backlog — the snapshot infrastructure is already live as of this version, so when rewind ships you'll be able to rewind turns that happened today.
 
 ---
 
@@ -428,6 +504,12 @@ flowchart LR
 | `/api/chat` | POST | `{agentId, message}` | `{reply, toolUses, cwd, model, apiKeySource}` |
 | `/api/chat/stream` | POST | `{agentId, message}` | NDJSON (see wire shape above) |
 | `/api/reset/:agentId` | POST | — | `{ok}` |
+| `/api/memories` | GET | `?agentId=` | `Array<Memory>` (global + matching agent if provided) |
+| `/api/memories` | POST | `{content, agentId?, category?}` | `Memory` |
+| `/api/memories/:id` | DELETE | — | `{ok}` |
+| `/api/memories` | DELETE | — | `{ok, cleared}` (wipes all memories) |
+| `/api/plan/:agentId` | GET | — | `{agentId, enabled}` |
+| `/api/plan/:agentId` | POST | `{enabled: boolean}` | `{agentId, enabled}` |
 | `/api/tasks` | GET | — | `Array<Task>` |
 | `/api/task` | POST | `{description, priority?, agentId?}` | `Task` |
 | `/api/task/:id/run` | POST | — | `Task` (updated) |
@@ -499,17 +581,16 @@ This repo is **not** a product. If you turn it into one, switch to API keys and 
 
 ## What's on the backlog
 
-The current implementation is foundation + four features. See [`backlog.md`](backlog.md) for the full sequential list. Top candidates for the next sessions:
+The current implementation covers F1–F7 foundation + C01–C11 and partial C12 (checkpointing infra). See [`backlog.md`](backlog.md) for the full sequential list. Top candidates for the next sessions:
 
-- **Markdown rendering + syntax highlighting in chat** (high impact, small effort)
-- **Persistent memory (SQLite)** — so sessions survive restarts
-- **Slash commands** (`/clear`, `/model`, `/agents`, `/help`)
-- **Plan mode toggle** — per-agent `permissionMode: 'plan'` for safe exploration
-- **File rewind** — expose `Query.rewindFiles()` as a "roll back" affordance
-- **Cost & token tracking** — read usage from `ResultMessage`
-- **Telegram / Discord bridge** — same engine, additional interface
+- **File rewind UI** (C12 completion) — the `enableFileCheckpointing: true` infrastructure is already live; what's missing is persisting the Query object across requests via streaming-input mode so `rewindFiles(userMessageId)` can be called on-demand. Needs a session-model refactor.
+- **Cost & token tracking** — read usage from the SDK's `ResultMessage` and surface per-turn + session-total token/cost.
+- **Telegram / Discord bridge** — same engine, additional interface; pairs with slash commands already in place.
+- **Session history sidebar** — persist conversations across restarts (memory exists, chats don't yet).
+- **AskUserQuestion inline UI** — surface the SDK's built-in tool for mid-turn clarification as an interactive card.
+- **MCP configuration UI** — point at an external MCP server and have its tools light up for a chosen agent.
 
-Ideas worth reading about that landed in the "Future — not scheduled" list: voice I/O (Pipecat / Gemini Live), "council mode" (multi-agent debate + synthesizer), MCP configuration UI, multi-pane chat, hook inspector, keyboard shortcuts, onboarding tour.
+Ideas worth reading about that landed in the "Future — not scheduled" list: voice I/O (Pipecat / Gemini Live), "council mode" (multi-agent debate + synthesizer), multi-pane chat, hook inspector, keyboard shortcuts, onboarding tour.
 
 ---
 

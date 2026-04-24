@@ -5,6 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Command Center</title>
     <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/styles/github-dark.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/marked@14.1.3/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.7/dist/purify.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.10.0/lib/common.min.js"></script>
   </head>
   <body>
     <aside id="sidebar">
@@ -34,9 +38,16 @@
           </button>
         </div>
         <div class="header-controls">
+          <button id="memory-btn" type="button" title="Open persistent memory">
+            🧠 Memory <span id="memory-count" class="tasks-count">0</span>
+          </button>
           <button id="tasks-btn" type="button" title="Open task board">
             📋 Tasks <span id="tasks-count" class="tasks-count">0</span>
           </button>
+          <label id="plan-toggle" title="Plan mode: read-only agent run (no tool execution)">
+            <input id="plan-checkbox" type="checkbox" />
+            <span>Plan</span>
+          </label>
           <select id="model-select" title="Model for this agent"></select>
           <button id="reset-btn" title="Start a new conversation with this agent">New chat</button>
         </div>
@@ -83,6 +94,40 @@
           <button id="cwd-cancel" type="button" class="btn-ghost">Cancel</button>
           <button id="cwd-save" type="button" class="btn-primary">Use this folder</button>
         </footer>
+      </div>
+    </div>
+
+    <div id="memory-modal" class="modal-overlay hidden">
+      <div class="modal modal-wide">
+        <header class="modal-header">
+          <div class="modal-title">🧠 Persistent Memory</div>
+          <button id="memory-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="modal-intro">
+            Memories are injected into the agent's system prompt on every message. Use
+            them for facts, preferences, and context you want to survive restarts.
+          </p>
+          <div class="task-create">
+            <textarea
+              id="memory-content"
+              rows="2"
+              placeholder="e.g. I prefer short, direct replies. Sign emails with — J."
+            ></textarea>
+            <div class="task-create-row">
+              <select id="memory-category">
+                <option value="fact">Fact</option>
+                <option value="preference" selected>Preference</option>
+                <option value="context">Context</option>
+              </select>
+              <select id="memory-agent">
+                <option value="">🌐 Global (all agents)</option>
+              </select>
+              <button id="memory-create-btn" class="btn-primary" type="button">Add</button>
+            </div>
+          </div>
+          <ul id="memory-list"></ul>
+        </div>
       </div>
     </div>
 

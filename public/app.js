@@ -38,6 +38,35 @@ function prettyModel(id) {
   return m ? m.label : id;
 }
 
+function renderMarkdown(text) {
+  if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
+    return null;
+  }
+  try {
+    marked.setOptions({
+      breaks: true,
+      gfm: true,
+      highlight: (code, lang) => {
+        if (typeof hljs !== "undefined" && lang && hljs.getLanguage(lang)) {
+          try {
+            return hljs.highlight(code, { language: lang }).value;
+          } catch {
+            /* noop */
+          }
+        }
+        return code;
+      },
+    });
+    const html = marked.parse(text);
+    return DOMPurify.sanitize(html, {
+      ADD_ATTR: ["target", "rel"],
+      ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i,
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function loadModels() {
   const res = await fetch("/api/models");
   state.models = await res.json();
@@ -115,6 +144,7 @@ function selectAgent(id) {
   input.disabled = false;
   sendBtn.disabled = false;
   renderModelSelect();
+  reflectPlanMode();
   renderMessages();
   input.focus();
 }
@@ -155,9 +185,29 @@ function renderMessages() {
     if (m.streaming && !m.text) {
       body.classList.add("streaming-empty");
       body.textContent = "…";
+    } else if (m.streaming) {
+      // Live streaming: keep plain text to avoid parsing markdown per delta
+      body.textContent = m.text;
+      body.classList.add("streaming");
+    } else if (m.role === "agent" && m.text) {
+      // Completed agent reply: render markdown (sanitized)
+      const html = renderMarkdown(m.text);
+      if (html !== null) {
+        body.innerHTML = html;
+        body.classList.add("markdown");
+        // Convert external links to open in new tab
+        for (const a of body.querySelectorAll("a[href]")) {
+          const href = a.getAttribute("href") || "";
+          if (/^https?:/i.test(href)) {
+            a.setAttribute("target", "_blank");
+            a.setAttribute("rel", "noopener noreferrer");
+          }
+        }
+      } else {
+        body.textContent = m.text;
+      }
     } else {
       body.textContent = m.text;
-      if (m.streaming) body.classList.add("streaming");
     }
     row.appendChild(body);
 
@@ -299,6 +349,7 @@ composer.addEventListener("submit", (e) => {
   input.value = "";
   input.style.height = "auto";
   hideFilePopover();
+  if (text.startsWith("/") && handleSlashCommand(text)) return;
   sendMessage(text);
 });
 
@@ -558,6 +609,8 @@ const taskAgentSelect = document.getElementById("task-agent");
 const taskCreateBtn = document.getElementById("task-create-btn");
 
 state.tasks = [];
+state.memories = [];
+state.planMode = {};
 
 tasksBtn.addEventListener("click", openTasksModal);
 tasksCloseBtn.addEventListener("click", () => tasksModal.classList.add("hidden"));
@@ -753,9 +806,294 @@ async function deleteTask(id) {
   }
 }
 
+// ----- Memory panel -----
+
+const memoryBtn = document.getElementById("memory-btn");
+const memoryCount = document.getElementById("memory-count");
+const memoryModal = document.getElementById("memory-modal");
+const memoryCloseBtn = document.getElementById("memory-close");
+const memoryContent = document.getElementById("memory-content");
+const memoryCategory = document.getElementById("memory-category");
+const memoryAgentSelect = document.getElementById("memory-agent");
+const memoryCreateBtn = document.getElementById("memory-create-btn");
+const memoryList = document.getElementById("memory-list");
+
+memoryBtn.addEventListener("click", openMemoryModal);
+memoryCloseBtn.addEventListener("click", () => memoryModal.classList.add("hidden"));
+memoryModal.addEventListener("click", (e) => {
+  if (e.target === memoryModal) memoryModal.classList.add("hidden");
+});
+
+memoryCreateBtn.addEventListener("click", createMemory);
+memoryContent.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    createMemory();
+  }
+});
+
+function populateMemoryAgentSelect() {
+  if (memoryAgentSelect.options.length > 1) return;
+  for (const a of state.agents) {
+    const opt = document.createElement("option");
+    opt.value = a.id;
+    opt.textContent = `${a.emoji} ${a.name} only`;
+    memoryAgentSelect.appendChild(opt);
+  }
+}
+
+async function openMemoryModal() {
+  populateMemoryAgentSelect();
+  await refreshMemories();
+  memoryModal.classList.remove("hidden");
+  memoryContent.focus();
+}
+
+async function refreshMemories() {
+  const res = await fetch("/api/memories");
+  state.memories = await res.json();
+  renderMemories();
+}
+
+function renderMemories() {
+  memoryCount.textContent = state.memories.length;
+  memoryList.innerHTML = "";
+  if (state.memories.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "col-empty";
+    empty.textContent = "No memories yet. Add one above.";
+    memoryList.appendChild(empty);
+    return;
+  }
+  for (const m of state.memories) {
+    const li = document.createElement("li");
+    li.className = "memory-card";
+
+    const meta = document.createElement("div");
+    meta.className = "memory-meta";
+
+    const badge = document.createElement("span");
+    badge.className = `memory-badge ${m.category}`;
+    badge.textContent = m.category;
+    meta.appendChild(badge);
+
+    const scope = document.createElement("span");
+    scope.className = "memory-scope";
+    if (m.agentId) {
+      const agent = state.agents.find((a) => a.id === m.agentId);
+      scope.textContent = agent ? `${agent.emoji} ${agent.name}` : m.agentId;
+    } else {
+      scope.textContent = "🌐 Global";
+    }
+    meta.appendChild(scope);
+
+    const content = document.createElement("div");
+    content.className = "memory-content";
+    content.textContent = m.content;
+
+    const del = document.createElement("button");
+    del.className = "memory-delete";
+    del.title = "Delete";
+    del.textContent = "×";
+    del.addEventListener("click", () => deleteMemory(m.id));
+
+    li.append(meta, content, del);
+    memoryList.appendChild(li);
+  }
+}
+
+async function createMemory() {
+  const content = memoryContent.value.trim();
+  if (!content) return;
+  memoryCreateBtn.disabled = true;
+  memoryCreateBtn.textContent = "Saving…";
+  try {
+    const body = { content, category: memoryCategory.value };
+    if (memoryAgentSelect.value) body.agentId = memoryAgentSelect.value;
+    const res = await fetch("/api/memories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    memoryContent.value = "";
+    await refreshMemories();
+  } catch (err) {
+    alert("Could not save memory: " + err.message);
+  } finally {
+    memoryCreateBtn.disabled = false;
+    memoryCreateBtn.textContent = "Add";
+  }
+}
+
+async function deleteMemory(id) {
+  try {
+    await fetch(`/api/memories/${id}`, { method: "DELETE" });
+    state.memories = state.memories.filter((m) => m.id !== id);
+    renderMemories();
+  } catch {
+    /* noop */
+  }
+}
+
+// ----- Slash commands -----
+
+function handleSlashCommand(text) {
+  const match = text.match(/^\/(\w+)(?:\s+(.*))?$/);
+  if (!match) return false;
+  const cmd = match[1].toLowerCase();
+  const arg = (match[2] || "").trim();
+  const agentId = state.activeAgentId;
+  const history = state.conversations[agentId] ?? [];
+
+  const say = (markdown) => {
+    history.push({
+      role: "agent",
+      text: markdown,
+      toolUses: [],
+      streaming: false,
+      system: true,
+    });
+    state.conversations[agentId] = history;
+    renderMessages();
+  };
+
+  if (cmd === "help") {
+    say(
+      [
+        "**Slash commands**",
+        "- `/clear` — start a new conversation with this agent",
+        "- `/model <id>` — switch model (opus, sonnet, haiku)",
+        "- `/model` — show the current model + options",
+        "- `/agents` — list all agents and their purpose",
+        "- `/plan on|off` — toggle plan mode for this agent",
+        "- `/help` — this message",
+      ].join("\n"),
+    );
+    return true;
+  }
+
+  if (cmd === "clear") {
+    fetch(`/api/reset/${agentId}`, { method: "POST" });
+    state.conversations[agentId] = [];
+    renderMessages();
+    return true;
+  }
+
+  if (cmd === "agents") {
+    say(
+      [
+        "**Available agents**",
+        ...state.agents.map(
+          (a) => `- ${a.emoji} **${a.name}** — ${a.description} _(model: ${prettyModel(a.model)})_`,
+        ),
+      ].join("\n"),
+    );
+    return true;
+  }
+
+  if (cmd === "model") {
+    if (!arg) {
+      const current = state.agents.find((a) => a.id === agentId);
+      say(
+        [
+          `Current model for **${current?.name}**: \`${current?.model}\``,
+          "Available: `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`.",
+          "Use `/model <id>` (aliases: opus, sonnet, haiku).",
+        ].join("\n\n"),
+      );
+      return true;
+    }
+    const aliases = {
+      opus: "claude-opus-4-7",
+      sonnet: "claude-sonnet-4-6",
+      haiku: "claude-haiku-4-5",
+    };
+    const target = aliases[arg.toLowerCase()] || arg;
+    const known = state.models.find((m) => target.startsWith(m.id));
+    if (!known) {
+      say(`⚠️ Unknown model \`${arg}\`. Try opus, sonnet, or haiku.`);
+      return true;
+    }
+    changeAgentModel(target);
+    say(`Model for **${state.agents.find((a) => a.id === agentId)?.name}** set to \`${known.label}\`.`);
+    return true;
+  }
+
+  if (cmd === "plan") {
+    const on = arg.toLowerCase() === "on" || arg === "1" || arg === "true";
+    const off = arg.toLowerCase() === "off" || arg === "0" || arg === "false";
+    if (!on && !off) {
+      say(
+        `Plan mode for **${state.agents.find((a) => a.id === agentId)?.name}** is \`${state.planMode[agentId] ? "on" : "off"}\`. Use \`/plan on\` or \`/plan off\`.`,
+      );
+      return true;
+    }
+    setPlanMode(agentId, on);
+    say(`Plan mode ${on ? "enabled" : "disabled"} for this agent.`);
+    return true;
+  }
+
+  say(`⚠️ Unknown command \`/${cmd}\`. Try \`/help\`.`);
+  return true;
+}
+
+async function changeAgentModel(modelId) {
+  const agentId = state.activeAgentId;
+  if (!agentId) return;
+  const res = await fetch(`/api/model/${agentId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: modelId }),
+  });
+  const data = await res.json();
+  if (!res.ok) return;
+  const agent = state.agents.find((a) => a.id === agentId);
+  if (agent) agent.model = data.model;
+  renderAgents();
+  renderModelSelect();
+}
+
+// ----- Plan mode -----
+
+const planCheckbox = document.getElementById("plan-checkbox");
+const planToggle = document.getElementById("plan-toggle");
+
+planCheckbox.addEventListener("change", async () => {
+  await setPlanMode(state.activeAgentId, planCheckbox.checked);
+});
+
+async function setPlanMode(agentId, enabled) {
+  if (!agentId) return;
+  try {
+    const res = await fetch(`/api/plan/${agentId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    state.planMode[agentId] = !!data.enabled;
+    if (agentId === state.activeAgentId) {
+      planCheckbox.checked = state.planMode[agentId];
+      planToggle.classList.toggle("active", state.planMode[agentId]);
+    }
+  } catch (err) {
+    alert("Could not set plan mode: " + err.message);
+  }
+}
+
+function reflectPlanMode() {
+  const on = !!state.planMode[state.activeAgentId];
+  planCheckbox.checked = on;
+  planToggle.classList.toggle("active", on);
+}
+
 (async () => {
   await loadModels();
   await loadCwd();
   await loadAgents();
   await refreshTasks();
+  await refreshMemories();
 })();

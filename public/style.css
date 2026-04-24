@@ -266,6 +266,91 @@ body {
   background: var(--panel);
   border: 1px solid var(--border);
 }
+
+/* Markdown output in completed agent replies */
+.msg.agent .msg-body.markdown {
+  line-height: 1.6;
+}
+.msg.agent .msg-body.markdown > *:first-child { margin-top: 0; }
+.msg.agent .msg-body.markdown > *:last-child { margin-bottom: 0; }
+.msg.agent .msg-body.markdown h1,
+.msg.agent .msg-body.markdown h2,
+.msg.agent .msg-body.markdown h3,
+.msg.agent .msg-body.markdown h4 {
+  margin: 16px 0 8px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.msg.agent .msg-body.markdown h1 { font-size: 1.4em; }
+.msg.agent .msg-body.markdown h2 { font-size: 1.25em; }
+.msg.agent .msg-body.markdown h3 { font-size: 1.1em; }
+.msg.agent .msg-body.markdown p { margin: 8px 0; }
+.msg.agent .msg-body.markdown ul,
+.msg.agent .msg-body.markdown ol {
+  padding-left: 22px;
+  margin: 8px 0;
+}
+.msg.agent .msg-body.markdown li { margin: 3px 0; }
+.msg.agent .msg-body.markdown li > p { margin: 2px 0; }
+.msg.agent .msg-body.markdown code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.9em;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+.msg.agent .msg-body.markdown pre {
+  background: #0b0d14;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  overflow-x: auto;
+  margin: 10px 0;
+}
+.msg.agent .msg-body.markdown pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: 0.88em;
+  line-height: 1.5;
+}
+.msg.agent .msg-body.markdown blockquote {
+  border-left: 3px solid var(--accent);
+  margin: 10px 0;
+  padding: 2px 12px;
+  color: var(--muted);
+  background: rgba(139, 158, 255, 0.05);
+  border-radius: 0 6px 6px 0;
+}
+.msg.agent .msg-body.markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+.msg.agent .msg-body.markdown a:hover { filter: brightness(1.15); }
+.msg.agent .msg-body.markdown strong { color: var(--text); font-weight: 600; }
+.msg.agent .msg-body.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: 14px 0;
+}
+.msg.agent .msg-body.markdown table {
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 0.92em;
+}
+.msg.agent .msg-body.markdown th,
+.msg.agent .msg-body.markdown td {
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  text-align: left;
+}
+.msg.agent .msg-body.markdown th {
+  background: var(--panel-2);
+  font-weight: 600;
+}
 .msg.agent .msg-body.streaming::after {
   content: "▌";
   color: var(--accent);
@@ -399,6 +484,110 @@ body {
   width: min(1100px, 95vw);
   max-height: 88vh;
 }
+
+/* Memory button shares the pill styling with #tasks-btn */
+#memory-btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+#memory-btn:hover { border-color: var(--accent); }
+
+/* Plan mode toggle */
+#plan-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+#plan-toggle:hover { border-color: var(--accent); }
+#plan-toggle input { margin: 0; cursor: pointer; }
+#plan-toggle.active {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.45);
+  color: #fbbf24;
+}
+
+/* Memory modal specifics */
+.modal-intro {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0 0 14px 0;
+  line-height: 1.5;
+}
+#memory-list {
+  list-style: none;
+  padding: 0;
+  margin: 16px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 420px;
+  overflow-y: auto;
+}
+.memory-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.memory-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex-shrink: 0;
+  width: 120px;
+}
+.memory-badge {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  display: inline-block;
+  width: fit-content;
+}
+.memory-badge.preference { color: #6ee7b7; border-color: rgba(110,231,183,0.4); }
+.memory-badge.fact { color: #8b9eff; border-color: rgba(139,158,255,0.4); }
+.memory-badge.context { color: #fbbf24; border-color: rgba(251,191,36,0.4); }
+.memory-scope {
+  font-size: 11px;
+  color: var(--muted);
+}
+.memory-content {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+  word-wrap: break-word;
+}
+.memory-delete {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 6px;
+}
+.memory-delete:hover { color: #f472b6; }
 
 /* Tasks button + board */
 #tasks-btn {

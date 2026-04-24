@@ -1,8 +1,8 @@
 # Command Center — Sequential Backlog
 
-> Last Updated: 2026-04-23 (autonomous session)
-> Total items: 13 (7 foundation + 6 queued features + future list)
-> Completed: F1–F7 foundation + C01 + C02 + C03 + C06
+> Last Updated: 2026-04-24 (C08–C11 shipped; C12 partial)
+> Total items: 18 (7 foundation + 11 planned features + future list)
+> Completed: F1–F7 foundation + C01 + C02 + C03 + C06 + C08 + C09 + C10 + C11 + C12 (snapshot infra only)
 
 > **Work order**: Items are numbered C##. Complete them in order unless a higher-priority need lands.
 >
@@ -240,6 +240,7 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 | **Multiple workspaces** | Switch between project contexts (different cwd + memory partition) without losing state. Matches how devs actually work. |
 | **Sub-agent depth limit** | Prevent runaway delegation chains. Currently no limit — a pathological prompt could cascade. |
 | **Auth profile switcher** | Toggle between "personal (OAuth, Max)" and "dev (API key)" modes for testing the commercial path end-to-end. |
+| **C12-follow-up: UI rewind** | Complete the file-rewind UI. `enableFileCheckpointing: true` is already set so snapshots exist; what's missing is holding the SDK `Query` object alive across HTTP requests so `Query.rewindFiles(userMessageId)` can be called on demand. Requires refactoring the chat lifecycle to streaming-input mode (`prompt` as `AsyncIterable<SDKUserMessage>`), tracking user-message UUIDs, and adding a rewind affordance on each user bubble. Effort: 2-3 hours, medium complexity. |
 | **AskUserQuestion from hooks** | Let hooks ask the user for approval mid-tool-run (e.g., before a destructive Bash command). |
 | **Per-agent avatar / personality** | One-click tone shifts: formal / casual / concise / playful. Stored as preamble injection. |
 | **Onboarding tour** | 5-step first-run flow that highlights sidebar, chat, folder, tasks, model selector. |
@@ -256,3 +257,9 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 | 2026-04-23 | C02 DONE | Streaming responses via `includePartialMessages: true`. NDJSON events from `/api/chat/stream`; blinking-cursor UI. Commit `b359d4c`. |
 | 2026-04-23 | C03 DONE | Task queue with Haiku-classified auto-routing. 3-column board, priority, agent override. Commit `9e4142e`. |
 | 2026-04-23 | C06 DONE | Playwright smoke + engine projects. 7 smoke (no engine) + 2 @engine tests. `npm run test:smoke` / `test:engine`. |
+| 2026-04-24 | C08 DONE | Markdown rendering in chat. `marked` + `DOMPurify` + `highlight.js` via jsDelivr; applied only to completed (non-streaming) agent bubbles. Slash-command output renders as markdown too. |
+| 2026-04-24 | C09 DONE | Persistent memory via `better-sqlite3` at `./data/lab.db`. CRUD routes; global or per-agent scope; `fact / preference / context` categories. Injected as `<persistent-memory>` system-prompt block on every `query()`, capped at ~2k chars. |
+| 2026-04-24 | C10 DONE | Slash commands. Client-side dispatcher intercepts `/cmd args` and handles `/help`, `/clear`, `/model [id]`, `/agents`, `/plan on/off` without a server round-trip. System-origin messages render through the same markdown pipeline. |
+| 2026-04-24 | C11 DONE | Plan mode toggle. Header checkbox flips `permissionMode: 'plan'` on for the active agent; task runs respect the toggle too. Switching plan mode clears that agent's session. |
+| 2026-04-24 | C12 PARTIAL | `enableFileCheckpointing: true` is now set on every chat/stream/task `query()` call — snapshots are captured. UI rewind-to-user-message is deferred because `Query.rewindFiles()` requires holding the Query object alive across requests, which needs a streaming-input architecture. Added as `C12-follow-up` in the future list. |
+| 2026-04-24 | Docs | `docs/drafts/linkedin-project-entry.md` added — copy-paste-ready content for LinkedIn Projects section. |

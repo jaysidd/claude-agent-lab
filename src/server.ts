@@ -6,6 +6,13 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { AGENTS, AGENT_LIST, MODELS, subAgentsFor } from "./agents.js";
+import {
+  listMemories,
+  createMemory,
+  deleteMemory,
+  clearMemories,
+  augmentedSystemPrompt,
+} from "./memory.js";
 
 type TaskPriority = "low" | "medium" | "high";
 type TaskStatus = "queued" | "active" | "done" | "error";
@@ -31,6 +38,7 @@ app.use(express.static(PUBLIC_DIR));
 
 const sessionByAgent = new Map<string, string>();
 const modelOverride = new Map<string, string>();
+const planMode = new Map<string, boolean>();
 const tasks = new Map<string, Task>();
 let currentCwd = os.homedir();
 
@@ -187,6 +195,7 @@ app.post("/api/chat", async (req, res) => {
 
   const resumeId = sessionByAgent.get(agent.id);
   const modelId = effectiveModel(agent.id);
+  const plan = planMode.get(agent.id) === true;
   const toolUses: Array<{ name: string; input: unknown }> = [];
   let finalText = "";
   let newSessionId: string | undefined;
@@ -199,10 +208,12 @@ app.post("/api/chat", async (req, res) => {
       prompt: message,
       options: {
         allowedTools: agent.allowedTools,
-        systemPrompt: agent.systemPrompt,
+        systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         resume: resumeId,
         cwd: currentCwd,
         model: modelId,
+        enableFileCheckpointing: true,
+        ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
       },
     })) {
@@ -236,6 +247,7 @@ app.post("/api/chat", async (req, res) => {
     cwd: currentCwd,
     model: reportedModel ?? modelId,
     apiKeySource,
+    planMode: plan,
   });
 });
 
@@ -273,6 +285,7 @@ app.post("/api/chat/stream", async (req, res) => {
 
   const resumeId = sessionByAgent.get(agent.id);
   const modelId = effectiveModel(agent.id);
+  const plan = planMode.get(agent.id) === true;
   const subAgents = subAgentsFor(agent.id);
 
   let newSessionId: string | undefined;
@@ -282,12 +295,14 @@ app.post("/api/chat/stream", async (req, res) => {
       prompt: message,
       options: {
         allowedTools: agent.allowedTools,
-        systemPrompt: agent.systemPrompt,
+        systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         resume: resumeId,
         cwd: currentCwd,
         model: modelId,
         includePartialMessages: true,
         abortController: ac,
+        enableFileCheckpointing: true,
+        ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
       },
     })) {
@@ -341,6 +356,58 @@ app.post("/api/chat/stream", async (req, res) => {
 app.post("/api/reset/:agentId", (req, res) => {
   sessionByAgent.delete(req.params.agentId);
   res.json({ ok: true });
+});
+
+// ----- Memory -----
+
+app.get("/api/memories", (req, res) => {
+  const agentId = (req.query.agentId as string) || undefined;
+  res.json(listMemories(agentId));
+});
+
+app.post("/api/memories", (req, res) => {
+  try {
+    const { content, agentId, category } = req.body ?? {};
+    const mem = createMemory({
+      content,
+      agentId: agentId || null,
+      category,
+    });
+    res.json(mem);
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? "invalid input" });
+  }
+});
+
+app.delete("/api/memories/:id", (req, res) => {
+  const ok = deleteMemory(req.params.id);
+  if (!ok) return res.status(404).json({ error: "not found" });
+  res.json({ ok: true });
+});
+
+app.delete("/api/memories", (_req, res) => {
+  const count = clearMemories();
+  res.json({ ok: true, cleared: count });
+});
+
+// ----- Plan mode -----
+
+app.get("/api/plan/:agentId", (req, res) => {
+  const agentId = req.params.agentId;
+  if (!AGENTS[agentId]) return res.status(400).json({ error: "unknown agent" });
+  res.json({ agentId, enabled: planMode.get(agentId) === true });
+});
+
+app.post("/api/plan/:agentId", (req, res) => {
+  const agentId = req.params.agentId;
+  if (!AGENTS[agentId]) return res.status(400).json({ error: "unknown agent" });
+  const enabled = !!req.body?.enabled;
+  if (enabled) planMode.set(agentId, true);
+  else planMode.delete(agentId);
+  // Plan mode changes context semantics; start fresh so prior session
+  // doesn't expect tools that are now disabled.
+  sessionByAgent.delete(agentId);
+  res.json({ agentId, enabled });
 });
 
 app.get("/api/tasks", (_req, res) => {
@@ -399,14 +466,17 @@ app.post("/api/task/:id/run", async (req, res) => {
 
   let finalText = "";
   const subAgents = subAgentsFor(agent.id);
+  const plan = planMode.get(agent.id) === true;
   try {
     for await (const msg of query({
       prompt: task.description,
       options: {
         allowedTools: agent.allowedTools,
-        systemPrompt: agent.systemPrompt,
+        systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         cwd: currentCwd,
         model: effectiveModel(agent.id),
+        enableFileCheckpointing: true,
+        ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
       },
     })) {

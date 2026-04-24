@@ -78,6 +78,35 @@ await page
 await page.waitForSelector("#file-popover:not(.hidden)");
 await waitFrame(300);
 await snap("07-file-autocomplete");
+await page.locator("#input").fill("");
+
+// 8. Memory panel with a few example memories
+await fetch("http://localhost:3333/api/memories", { method: "DELETE" });
+const seedMems = [
+  { content: "Name: Jay. Company: Clawless. Closes emails with '— J'.", category: "fact" },
+  { content: "Prefers short, direct replies — no preamble, no filler.", category: "preference" },
+  { content: "Building Command Center as an educational reference for the Agent SDK.", category: "context" },
+];
+for (const m of seedMems) {
+  await fetch("http://localhost:3333/api/memories", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(m),
+  });
+}
+await page.locator("#memory-btn").click();
+await page.waitForSelector("#memory-modal:not(.hidden)");
+await waitFrame(300);
+await snap("08-memory-panel");
+await page.locator("#memory-close").click();
+
+// 9. Slash command output — /agents rendered as markdown
+await page.locator(".agent-item", { hasText: "Main" }).click();
+await page.locator("#input").fill("/agents");
+await page.keyboard.press("Enter");
+await page.waitForSelector(".msg.agent .msg-body.markdown");
+await waitFrame(400);
+await snap("09-slash-command");
 
 await browser.close();
 console.log("done");
