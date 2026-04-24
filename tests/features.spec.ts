@@ -28,6 +28,25 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     await expect(page.locator(".memory-card")).toHaveCount(0);
   });
 
+  test("slash command popover autocompletes when typing /", async ({ page }) => {
+    await page.goto("/");
+    await page.locator(".agent-item", { hasText: "Main" }).click();
+    const input = page.locator("#input");
+    await input.click();
+    await input.pressSequentially("/", { delay: 30 });
+    await expect(page.locator("#command-popover")).toBeVisible({ timeout: 5_000 });
+    // All 12 commands should show for a single "/"
+    await expect(page.locator(".command-item")).toHaveCount(12);
+
+    // Narrow to /think — should show 3 items
+    await input.pressSequentially("think", { delay: 30 });
+    await expect(page.locator(".command-item")).toHaveCount(3);
+
+    // Escape closes the popover
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#command-popover")).toBeHidden();
+  });
+
   test("slash command /agents renders a system message", async ({ page }) => {
     await page.goto("/");
     await page.locator(".agent-item", { hasText: "Main" }).click();

@@ -387,11 +387,44 @@ composer.addEventListener("submit", (e) => {
   input.value = "";
   input.style.height = "auto";
   hideFilePopover();
+  hideCommandPopover();
   if (text.startsWith("/") && handleSlashCommand(text)) return;
   sendMessage(text);
 });
 
 input.addEventListener("keydown", (e) => {
+  if (state.commandPopover.open) {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      state.commandPopover.active = Math.min(
+        state.commandPopover.active + 1,
+        state.commandPopover.items.length - 1,
+      );
+      renderCommandPopover();
+      return;
+    }
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      state.commandPopover.active = Math.max(state.commandPopover.active - 1, 0);
+      renderCommandPopover();
+      return;
+    }
+    if (e.key === "Tab") {
+      e.preventDefault();
+      completeSelectedCommand({ submit: false });
+      return;
+    }
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      completeSelectedCommand({ submit: true });
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      hideCommandPopover();
+      return;
+    }
+  }
   if (state.filePopover.open) {
     if (e.key === "ArrowDown") {
       e.preventDefault();
@@ -428,7 +461,8 @@ input.addEventListener("keydown", (e) => {
 input.addEventListener("input", () => {
   input.style.height = "auto";
   input.style.height = Math.min(input.scrollHeight, 200) + "px";
-  maybeShowFilePopover();
+  maybeShowCommandPopover();
+  if (!input.value.startsWith("/")) maybeShowFilePopover();
 });
 
 resetBtn.addEventListener("click", async () => {
@@ -638,6 +672,16 @@ function insertSelectedFile() {
 }
 
 input.addEventListener("blur", () => setTimeout(hideFilePopover, 100));
+
+// Dismiss the command popover on any click outside the input or the popover
+// itself. Robust against the Playwright / keyboard focus-churn that makes a
+// blur-based dismiss flaky.
+document.addEventListener("mousedown", (e) => {
+  if (!state.commandPopover.open) return;
+  if (e.target === input) return;
+  if (e.target.closest && e.target.closest("#command-popover")) return;
+  hideCommandPopover();
+});
 
 // ----- Task board -----
 
@@ -982,6 +1026,92 @@ async function deleteMemory(id) {
     renderMemories();
   } catch {
     /* noop */
+  }
+}
+
+// ----- Slash command autocomplete popover -----
+
+const SLASH_COMMANDS = [
+  { cmd: "/help", desc: "list all slash commands" },
+  { cmd: "/clear", desc: "new conversation with this agent" },
+  { cmd: "/agents", desc: "list all agents and what they do" },
+  { cmd: "/model", desc: "show current model + options" },
+  { cmd: "/model opus", desc: "switch to Opus 4.7 (careful reasoning)" },
+  { cmd: "/model sonnet", desc: "switch to Sonnet 4.6 (balanced default)" },
+  { cmd: "/model haiku", desc: "switch to Haiku 4.5 (fast, cheap)" },
+  { cmd: "/think hard", desc: "alias for /model opus" },
+  { cmd: "/think fast", desc: "alias for /model haiku" },
+  { cmd: "/think default", desc: "reset this agent to its configured model" },
+  { cmd: "/plan on", desc: "enable plan mode — read-only agent run" },
+  { cmd: "/plan off", desc: "disable plan mode" },
+];
+
+const commandPopover = document.getElementById("command-popover");
+state.commandPopover = { open: false, items: [], active: 0 };
+
+function maybeShowCommandPopover() {
+  const value = input.value;
+  // Only trigger when the line begins with "/" — not when the user references
+  // a path mid-sentence. Also hide once the user hits Enter and submits.
+  if (!value.startsWith("/")) return hideCommandPopover();
+  // If there's more than one space and the second token is already resolved
+  // (e.g. "/model opus  "), hide so the popover doesn't shadow the rest.
+  if (value.trim().split(/\s+/).length > 2) return hideCommandPopover();
+
+  const q = value.toLowerCase();
+  const matches = SLASH_COMMANDS.filter((c) => c.cmd.toLowerCase().startsWith(q));
+  if (!matches.length) return hideCommandPopover();
+
+  state.commandPopover = { open: true, items: matches, active: 0 };
+  renderCommandPopover();
+}
+
+function renderCommandPopover() {
+  commandPopover.innerHTML = "";
+  commandPopover.classList.remove("hidden");
+
+  const header = document.createElement("div");
+  header.className = "command-popover-header";
+  header.textContent = "Slash commands  ·  ↑↓ navigate  ·  Tab to complete  ·  Enter to run";
+  commandPopover.appendChild(header);
+
+  state.commandPopover.items.forEach((c, i) => {
+    const el = document.createElement("div");
+    el.className = "command-item" + (i === state.commandPopover.active ? " active" : "");
+    const name = document.createElement("div");
+    name.className = "cmd-name";
+    name.textContent = c.cmd;
+    const desc = document.createElement("div");
+    desc.className = "cmd-desc";
+    desc.textContent = c.desc;
+    el.append(name, desc);
+    el.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      state.commandPopover.active = i;
+      completeSelectedCommand({ submit: true });
+    });
+    commandPopover.appendChild(el);
+  });
+}
+
+function hideCommandPopover() {
+  state.commandPopover.open = false;
+  commandPopover.classList.add("hidden");
+}
+
+function completeSelectedCommand({ submit } = { submit: false }) {
+  const pick = state.commandPopover.items[state.commandPopover.active];
+  if (!pick) return;
+  input.value = pick.cmd;
+  input.dispatchEvent(new Event("input"));
+  if (submit) {
+    hideCommandPopover();
+    composer.requestSubmit();
+  } else {
+    // Tab-completion: insert the command, leave cursor at end,
+    // keep popover open only if there are subcommands still matching
+    input.setSelectionRange(input.value.length, input.value.length);
+    maybeShowCommandPopover();
   }
 }
 

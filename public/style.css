@@ -643,12 +643,13 @@ body {
 .msg-speak-btn.speaking { color: #6ee7b7; opacity: 1; }
 
 /* @file popover */
-#file-popover {
+#file-popover,
+#command-popover {
   position: absolute;
   bottom: calc(100% + 8px);
   left: 0;
   right: 0;
-  max-height: 240px;
+  max-height: 280px;
   overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -656,6 +657,39 @@ body {
   padding: 6px;
   box-shadow: 0 8px 24px rgba(0,0,0,0.4);
   z-index: 10;
+}
+
+.command-popover-header {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+
+.command-item {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.command-item:hover,
+.command-item.active {
+  background: var(--panel-2);
+}
+.command-item .cmd-name {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 13px;
+  color: var(--accent);
+}
+.command-item .cmd-desc {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.3;
 }
 
 .file-item {
