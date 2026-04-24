@@ -252,7 +252,24 @@ app.post("/api/chat/stream", async (req, res) => {
   res.setHeader("Connection", "keep-alive");
   (res as any).flushHeaders?.();
 
-  const write = (event: any) => res.write(JSON.stringify(event) + "\n");
+  const ac = new AbortController();
+  let clientClosed = false;
+  res.on("close", () => {
+    if (!res.writableEnded) {
+      clientClosed = true;
+      ac.abort();
+    }
+  });
+
+  const write = (event: any) => {
+    if (clientClosed || res.writableEnded) return false;
+    try {
+      return res.write(JSON.stringify(event) + "\n");
+    } catch {
+      clientClosed = true;
+      return false;
+    }
+  };
 
   const resumeId = sessionByAgent.get(agent.id);
   const modelId = effectiveModel(agent.id);
@@ -270,9 +287,11 @@ app.post("/api/chat/stream", async (req, res) => {
         cwd: currentCwd,
         model: modelId,
         includePartialMessages: true,
+        abortController: ac,
         ...(subAgents ? { agents: subAgents } : {}),
       },
     })) {
+      if (clientClosed) break;
       const anyMsg = msg as any;
 
       if (anyMsg.type === "system" && anyMsg.subtype === "init") {
@@ -308,13 +327,15 @@ app.post("/api/chat/stream", async (req, res) => {
       }
     }
   } catch (err: any) {
-    console.error("stream error:", err);
-    write({ kind: "error", message: err?.message ?? "agent error" });
+    if (err?.name !== "AbortError" && !clientClosed) {
+      console.error("stream error:", err);
+      write({ kind: "error", message: err?.message ?? "agent error" });
+    }
   }
 
-  if (newSessionId) sessionByAgent.set(agent.id, newSessionId);
+  if (newSessionId && !clientClosed) sessionByAgent.set(agent.id, newSessionId);
   write({ kind: "done" });
-  res.end();
+  if (!res.writableEnded) res.end();
 });
 
 app.post("/api/reset/:agentId", (req, res) => {
@@ -347,8 +368,17 @@ app.post("/api/task", async (req, res) => {
     createdAt: Date.now(),
   };
   tasks.set(task.id, task);
+  pruneCompletedTasks();
   res.json(task);
 });
+
+function pruneCompletedTasks(cap = 50) {
+  const completed = Array.from(tasks.values())
+    .filter((t) => t.status === "done" || t.status === "error")
+    .sort((a, b) => (a.completedAt ?? 0) - (b.completedAt ?? 0));
+  const excess = completed.length - cap;
+  for (let i = 0; i < excess; i++) tasks.delete(completed[i].id);
+}
 
 app.post("/api/task/:id/run", async (req, res) => {
   const task = tasks.get(req.params.id);
@@ -403,7 +433,8 @@ app.delete("/api/task/:id", (req, res) => {
 });
 
 const PORT = Number(process.env.PORT ?? 3333);
-app.listen(PORT, () => {
-  console.log(`Command Center running at http://localhost:${PORT}`);
+const HOST = process.env.HOST ?? "127.0.0.1";
+app.listen(PORT, HOST, () => {
+  console.log(`Command Center running at http://${HOST}:${PORT}`);
   console.log(`  cwd: ${currentCwd}`);
 });

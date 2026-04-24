@@ -4,8 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "tsx src/hello.ts",
+    "start": "tsx src/server.ts",
     "serve": "tsx src/server.ts",
+    "hello": "tsx src/hello.ts",
     "test": "playwright test",
     "test:smoke": "playwright test --project=smoke",
     "test:engine": "playwright test --project=engine"

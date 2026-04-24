@@ -280,8 +280,6 @@ body {
 @keyframes blink { 50% { opacity: 0; } }
 @keyframes pulse { 50% { opacity: 0.5; } }
 
-.msg-meta { font-size: 11px; color: var(--muted); padding: 0 6px; }
-
 .tool-chips {
   display: flex;
   flex-wrap: wrap;
@@ -303,23 +301,6 @@ body {
   background: linear-gradient(90deg, rgba(139,158,255,0.15), rgba(110,231,183,0.10));
   border-color: rgba(139,158,255,0.35);
   font-family: inherit;
-}
-
-.thinking {
-  color: var(--muted);
-  font-style: italic;
-  align-self: flex-start;
-  padding: 8px 2px;
-}
-.thinking::after {
-  content: "…";
-  animation: dots 1.2s steps(4, end) infinite;
-}
-@keyframes dots {
-  0%, 20% { content: ""; }
-  40% { content: "."; }
-  60% { content: ".."; }
-  80%, 100% { content: "..."; }
 }
 
 /* Composer */

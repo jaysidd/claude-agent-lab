@@ -64,14 +64,30 @@ function renderAgents() {
     const el = document.createElement("div");
     el.className = "agent-item" + (agent.id === state.activeAgentId ? " active" : "");
     el.dataset.id = agent.id;
-    el.innerHTML = `
-      <div class="agent-avatar" style="color:${agent.accent}">${agent.emoji}</div>
-      <div class="agent-meta">
-        <div class="agent-name">${agent.name}</div>
-        <div class="agent-desc">${agent.description}</div>
-        <div class="agent-model-chip">${prettyModel(agent.model)}</div>
-      </div>
-    `;
+
+    const avatar = document.createElement("div");
+    avatar.className = "agent-avatar";
+    avatar.style.color = agent.accent;
+    avatar.textContent = agent.emoji;
+
+    const meta = document.createElement("div");
+    meta.className = "agent-meta";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "agent-name";
+    nameEl.textContent = agent.name;
+
+    const descEl = document.createElement("div");
+    descEl.className = "agent-desc";
+    descEl.textContent = agent.description;
+
+    const chipEl = document.createElement("div");
+    chipEl.className = "agent-model-chip";
+    chipEl.textContent = prettyModel(agent.model);
+
+    meta.append(nameEl, descEl, chipEl);
+    el.append(avatar, meta);
+
     el.addEventListener("click", () => selectAgent(agent.id));
     agentListEl.appendChild(el);
   }
@@ -111,10 +127,21 @@ function renderMessages() {
     const agent = state.agents.find((a) => a.id === state.activeAgentId);
     const empty = document.createElement("div");
     empty.className = "empty-state";
-    empty.innerHTML =
-      "Say hi to kick off a conversation.<br>Each agent has its own memory of this session.<br><br>" +
-      `Folder: <code>${shortenPath(state.cwd)}</code><br>` +
-      `Model: <code>${prettyModel(agent?.model)}</code>`;
+    empty.append(
+      "Say hi to kick off a conversation.",
+      document.createElement("br"),
+      "Each agent has its own memory of this session.",
+      document.createElement("br"),
+      document.createElement("br"),
+      "Folder: ",
+    );
+    const folderCode = document.createElement("code");
+    folderCode.textContent = shortenPath(state.cwd);
+    empty.appendChild(folderCode);
+    empty.append(document.createElement("br"), "Model: ");
+    const modelCode = document.createElement("code");
+    modelCode.textContent = prettyModel(agent?.model);
+    empty.appendChild(modelCode);
     messagesEl.appendChild(empty);
     return;
   }
@@ -158,13 +185,23 @@ function renderMessages() {
     if (m.role === "agent" && m.model) {
       const footer = document.createElement("div");
       footer.className = "msg-footer";
-      const authLabel =
-        m.apiKeySource === "none" || m.apiKeySource === "oauth"
-          ? `<span class="auth-oauth">🔐 Max plan · subscription</span>`
-          : m.apiKeySource
-            ? `<span class="auth-key">🔑 API key (${m.apiKeySource})</span>`
-            : "";
-      footer.innerHTML = `<span>🧠 ${prettyModel(m.model)}</span> ${authLabel}`;
+
+      const modelSpan = document.createElement("span");
+      modelSpan.textContent = `🧠 ${prettyModel(m.model)}`;
+      footer.appendChild(modelSpan);
+
+      if (m.apiKeySource) {
+        const authSpan = document.createElement("span");
+        if (m.apiKeySource === "none" || m.apiKeySource === "oauth") {
+          authSpan.className = "auth-oauth";
+          authSpan.textContent = "🔐 Max plan · subscription";
+        } else {
+          authSpan.className = "auth-key";
+          authSpan.textContent = `🔑 API key (${m.apiKeySource})`;
+        }
+        footer.appendChild(authSpan);
+      }
+
       row.appendChild(footer);
     }
 
@@ -180,12 +217,15 @@ async function sendMessage(text) {
   history.push({ role: "user", text });
   state.conversations[agentId] = history;
   state.pending = true;
-  renderMessages();
 
   // Insert an empty agent bubble we'll fill incrementally
   const agentMsg = { role: "agent", text: "", toolUses: [], streaming: true };
   history.push(agentMsg);
   renderMessages();
+
+  // Cache the streaming bubble's body element — mutate it directly on each delta
+  // to avoid O(turns x deltas) DOM churn.
+  const streamingBody = messagesEl.querySelector(".msg.agent:last-child .msg-body");
 
   try {
     const res = await fetch("/api/chat/stream", {
@@ -218,14 +258,29 @@ async function sendMessage(text) {
           agentMsg.apiKeySource = ev.apiKeySource;
         } else if (ev.kind === "text_delta") {
           agentMsg.text += ev.text;
+          // Fast path: update the cached body element directly
+          if (streamingBody) {
+            if (streamingBody.classList.contains("streaming-empty")) {
+              streamingBody.classList.remove("streaming-empty");
+              streamingBody.classList.add("streaming");
+            }
+            streamingBody.textContent = agentMsg.text;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            continue;
+          }
+          renderMessages();
         } else if (ev.kind === "tool_use") {
           agentMsg.toolUses.push({ name: ev.name, input: ev.input });
+          renderMessages();
         } else if (ev.kind === "result") {
-          if (!agentMsg.text) agentMsg.text = ev.text;
+          if (!agentMsg.text) {
+            agentMsg.text = ev.text;
+            if (streamingBody) streamingBody.textContent = agentMsg.text;
+          }
         } else if (ev.kind === "error") {
           agentMsg.text = `⚠️ ${ev.message}`;
+          if (streamingBody) streamingBody.textContent = agentMsg.text;
         }
-        renderMessages();
       }
     }
   } catch (err) {
@@ -449,8 +504,16 @@ function renderFilePopover() {
   state.filePopover.items.forEach((f, i) => {
     const el = document.createElement("div");
     el.className = "file-item" + (i === state.filePopover.active ? " active" : "");
-    const icon = f.isDir ? "📁" : "📄";
-    el.innerHTML = `<span class="file-icon ${f.isDir ? "file-dir" : ""}">${icon}</span><span>${f.name}</span>`;
+
+    const iconSpan = document.createElement("span");
+    iconSpan.className = "file-icon" + (f.isDir ? " file-dir" : "");
+    iconSpan.textContent = f.isDir ? "📁" : "📄";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent = f.name;
+
+    el.append(iconSpan, nameSpan);
+
     el.addEventListener("mousedown", (e) => {
       e.preventDefault();
       state.filePopover.active = i;
