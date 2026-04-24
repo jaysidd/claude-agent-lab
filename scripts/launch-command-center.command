@@ -13,10 +13,49 @@
 # exiting, so you can read the Terminal window instead of staring at
 # "localhost refused to connect" in the browser.
 
-PROJECT_DIR="${COMMAND_CENTER_DIR:-$HOME/Desktop/claude-agent-lab}"
 PORT="${PORT:-3333}"
 URL="http://localhost:$PORT"
 LOG="/tmp/command-center-$PORT.log"
+
+# -----------------------------------------------------------------------------
+# Resolve the project folder. Preference order:
+#   1. COMMAND_CENTER_DIR env var (explicit override)
+#   2. Parent of this script (works when the launcher lives in the repo's
+#      own scripts/ folder — auto-follows the project wherever it moves)
+#   3. Common locations on disk (for the standalone Desktop copy)
+# -----------------------------------------------------------------------------
+is_lab_dir() {
+  [ -f "$1/package.json" ] && grep -q '"claude-agent-lab"' "$1/package.json" 2>/dev/null
+}
+
+PROJECT_DIR=""
+
+if [ -n "${COMMAND_CENTER_DIR:-}" ]; then
+  PROJECT_DIR="$COMMAND_CENTER_DIR"
+else
+  # Option 2 — if this script is inside "<project>/scripts/", its parent IS the project
+  SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if is_lab_dir "$(cd "$SCRIPT_PATH/.." 2>/dev/null && pwd)"; then
+    PROJECT_DIR="$(cd "$SCRIPT_PATH/.." && pwd)"
+  fi
+
+  # Option 3 — search common parents
+  if [ -z "$PROJECT_DIR" ]; then
+    for candidate in \
+      "$HOME/Documents/projects/claude-agent-lab" \
+      "$HOME/Documents/claude-agent-lab" \
+      "$HOME/Projects/claude-agent-lab" \
+      "$HOME/projects/claude-agent-lab" \
+      "$HOME/code/claude-agent-lab" \
+      "$HOME/src/claude-agent-lab" \
+      "$HOME/Desktop/claude-agent-lab"; do
+      if is_lab_dir "$candidate"; then
+        PROJECT_DIR="$candidate"
+        break
+      fi
+    done
+  fi
+fi
 
 printf "\033]0;Command Center\a"  # Terminal title
 
@@ -35,11 +74,24 @@ pause_and_exit() {
   exit "$code"
 }
 
-if [ ! -d "$PROJECT_DIR" ]; then
-  echo "❌ Project folder not found at: $PROJECT_DIR"
+if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
+  echo "❌ Could not find the claude-agent-lab project folder."
   echo ""
-  echo "Fix: set COMMAND_CENTER_DIR to the correct path, e.g."
-  echo "  COMMAND_CENTER_DIR=/path/to/claude-agent-lab open 'Command Center.command'"
+  echo "Searched:"
+  echo "  \$COMMAND_CENTER_DIR env var — ${COMMAND_CENTER_DIR:-(not set)}"
+  echo "  ~/Documents/projects/claude-agent-lab"
+  echo "  ~/Documents/claude-agent-lab"
+  echo "  ~/Projects/claude-agent-lab"
+  echo "  ~/projects/claude-agent-lab"
+  echo "  ~/code/claude-agent-lab"
+  echo "  ~/src/claude-agent-lab"
+  echo "  ~/Desktop/claude-agent-lab"
+  echo ""
+  echo "Fix: set the env var before launching, e.g."
+  echo "  COMMAND_CENTER_DIR=/full/path/to/claude-agent-lab \\"
+  echo "    open 'Command Center.command'"
+  echo ""
+  echo "Or edit the candidate list near the top of this file."
   pause_and_exit 1
 fi
 
