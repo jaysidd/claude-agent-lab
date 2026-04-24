@@ -1,0 +1,203 @@
+# Command Center — Architecture
+
+> Last updated: 2026-04-23
+
+## Mental model
+
+The SDK is not a chat API. It's the same agent loop Claude Code runs, exposed as a TypeScript function. You hand it a prompt + options and iterate over an async stream of events (`system.init`, `assistant`, `tool_use`, `tool_result`, `result`). Everything you see in Claude Code — tool use, plan mode, hooks, sub-agents, sessions — is available as an option on `query()`.
+
+Command Center takes that raw primitive and wraps it in the thinnest possible UI layer. Express for HTTP, vanilla JS for the browser, zero build pipeline for the frontend. The SDK does the hard work; we render it.
+
+---
+
+## Process topology
+
+```
+┌─────────────────┐         ┌──────────────────────────────────┐
+│  Browser        │         │  Node.js process (tsx src/server.ts)
+│  public/*       │◄────────┤   ├── Express (port 3333)
+│  vanilla JS     │  JSON   │   │   ├── /api/agents
+└────────┬────────┘         │   │   ├── /api/cwd, /api/browse, /api/files
+         │                  │   │   ├── /api/model/:agentId
+         │ /api/chat        │   │   └── /api/chat   ──┐
+         └──────────────────►   │                      │
+                            │   ├── state (in-memory) │
+                            │   │   ├── sessionByAgent
+                            │   │   ├── modelOverride │
+                            │   │   └── currentCwd    │
+                            │   │                      │
+                            │   └── Claude Agent SDK  ◄┘
+                            │       ├── query({...})
+                            │       └── spawns `claude` subprocess
+                            └──────────────┬───────────────────┘
+                                           │ OAuth session
+                                           ▼
+                            Claude Max subscription (~/.claude/...)
+```
+
+One OS process. No IPC, no WebSockets (yet), no secondary server. The `claude` binary that the SDK spawns is the only child process.
+
+---
+
+## File map
+
+| Path | Role | LOC |
+|---|---|---|
+| `src/server.ts` | Express app, API routes, SDK call site | ~180 |
+| `src/agents.ts` | Agent configs (id, name, systemPrompt, tools, model) | ~80 |
+| `src/hello.ts` | One-shot URL summarizer (smoke test) | ~15 |
+| `public/index.html` | UI markup | ~65 |
+| `public/style.css` | Dark command-center theme | ~380 |
+| `public/app.js` | Frontend logic: agents, chat, folder picker, @file | ~370 |
+| `package.json` | npm scripts + deps | — |
+| `tsconfig.json` | TS config (ESM, ES2022, strict) | — |
+
+Total hand-written: ~1,100 LOC across the whole project. By design. Everything the SDK gives us for free stays in the SDK.
+
+---
+
+## State model
+
+All state is in-memory on the server. Restart = fresh.
+
+| State | Type | Where | Reset on |
+|---|---|---|---|
+| Session IDs per agent | `Map<agentId, sessionId>` | `server.ts:17` | `/api/reset/:agentId`, `cwd` change, model override |
+| Model overrides | `Map<agentId, string>` | `server.ts:18` | `POST /api/model/:agentId` with empty body |
+| Current working directory | `string` (default: `os.homedir()`) | `server.ts:19` | `POST /api/cwd` |
+| Chat history (UI only) | `state.conversations[agentId]` | `app.js:4` | New chat button, cwd change, model change |
+
+**Frontend history is cosmetic** — it shows what the user and agent have said in the current browser session. The *actual* conversation context lives in the SDK session (`resume:`). Reload the browser and history is empty, but if the server still has the session ID, the agent still remembers.
+
+This duality is deliberate. Cleaner than trying to persist + sync. Persistence is tracked as C04 (SQLite-backed memory that survives restarts).
+
+---
+
+## API contract
+
+### `POST /api/chat`
+Request:
+```json
+{ "agentId": "main", "message": "..." }
+```
+Response:
+```json
+{
+  "reply": "...",
+  "toolUses": [{"name": "Read", "input": {...}}],
+  "model": "claude-sonnet-4-6",
+  "apiKeySource": "none",
+  "cwd": "/Users/you/project"
+}
+```
+
+Server:
+1. Resolves `agent` from `agents.ts`
+2. Looks up `resumeId` from `sessionByAgent.get(agentId)`
+3. Resolves `modelId` via `effectiveModel(agentId)` (override → default)
+4. Calls `query({ prompt, options: { allowedTools, systemPrompt, resume, cwd, model } })`
+5. Iterates the async stream:
+   - `system.init` → captures `session_id`, `model`, `apiKeySource`
+   - `assistant` with `tool_use` blocks → appends to `toolUses[]`
+   - result with `result` string → final text
+6. Persists new `session_id` to `sessionByAgent`
+7. Returns JSON
+
+The route is buffered (full response before response sent). Streaming is C02.
+
+### Other routes
+All synchronous, all return JSON, all reject bad input with `{ error }` + 400.
+
+---
+
+## Agent configuration (`src/agents.ts`)
+
+```ts
+{
+  id: string            // route key: "main" | "comms" | "content" | "ops"
+  name: string          // display name
+  emoji: string         // avatar glyph
+  accent: string        // color (sidebar icon, etc.)
+  description: string   // one-line summary for sidebar
+  systemPrompt: string  // personality + role
+  allowedTools: string[] // SDK tool allowlist
+  model: string         // default model
+}
+```
+
+Current defaults:
+
+| Agent | Tools | Model | Why |
+|---|---|---|---|
+| Main | (none) | Sonnet 4.6 | Pure reasoning, routing, triage |
+| Comms | `WebFetch` | Sonnet 4.6 | Draft messages; sometimes pull context |
+| Content | `WebSearch`, `WebFetch` | **Opus 4.7** | Best creative output |
+| Ops | `Read`, `Glob`, `Grep` | Sonnet 4.6 | Read files in current cwd |
+
+Adding a new agent = one entry in this file. No server changes needed.
+
+---
+
+## Session handling
+
+The SDK's `resume: sessionId` option is how multi-turn conversations work. We capture `session_id` from the first `system.init` message of each `query()` call and store it under the agent's ID. Next message → pass `resume:` → SDK loads the prior conversation's context.
+
+Gotcha: **changing `cwd` mid-session confuses the agent** (context includes the old cwd). We work around this by clearing all agent sessions (`sessionByAgent.clear()`) on `POST /api/cwd`. Same for model overrides — changing the model per-agent clears that agent's session.
+
+---
+
+## Model selection
+
+Three models wired via `MODELS` in `agents.ts`:
+- `claude-opus-4-7` — best creative/reasoning
+- `claude-sonnet-4-6` — balanced default
+- `claude-haiku-4-5` — fastest/cheapest
+
+Per-agent default in the config file. Runtime override via `POST /api/model/:agentId`. The UI surfaces both: sidebar shows each agent's current model as a chip; `<select>` in the chat header changes it. The model used for each specific reply is echoed back in the response's `model` field and shown in the message footer — so you always know what answered you.
+
+---
+
+## Auth path
+
+The SDK checks in order:
+1. `ANTHROPIC_API_KEY` env var (if set, uses it)
+2. Falls back to the `claude` CLI's stored OAuth session (`~/.claude/...`)
+3. If neither, errors out
+
+Currently the env var is unset, so every call rides on the Max subscription via OAuth. The response's `apiKeySource` field is `"none"` when OAuth is active — we translate that to "Max plan · subscription" in the UI for clarity.
+
+**Commercial distribution would require API key auth.** Not a todo for this project; that's Clawless territory.
+
+---
+
+## Frontend model
+
+Pure vanilla JS. No framework. Global `state` object holds:
+- `agents` — loaded once from `/api/agents`
+- `models` — loaded once from `/api/models`
+- `activeAgentId` — current selection
+- `conversations` — `{ [agentId]: Array<{role, text, toolUses?, model?, apiKeySource?}> }`
+- `cwd`, `home`, `browse`, `filePopover` — UI helpers
+
+Rendering is re-render-the-world on every state change (cheap at this scale). `renderMessages()` rebuilds the chat log from `state.conversations[activeAgentId]`.
+
+No client-side routing. No persistence. Deliberate simplicity.
+
+---
+
+## Design decisions worth calling out
+
+- **Why vanilla JS and not React?** The point is to make SDK concepts visible. A framework adds abstraction between the learner and the primitive. When the primitives stabilize in the dev's mind, a framework is fine.
+- **Why Express 5 and not Fastify / Hono?** Express is the least surprising thing in Node. This is a learning project.
+- **Why one server instead of separate main/renderer (Electron)?** Electron is the right call when you need native OS integration (filesystem, menus, notifications). The Agent SDK already has filesystem access via `Read/Write/Bash`; notifications + packaging are a later concern tracked as `C07`.
+- **Why in-memory state?** Fastest path to seeing the concepts. Persistence (C04) upgrades this to SQLite when the agents start remembering useful things across restarts.
+
+---
+
+## Known constraints
+
+- Personal use only (Max OAuth) — see CLAUDE.md auth note.
+- Single user, single browser tab. No concurrent users.
+- Restarts lose all chat history and agent sessions.
+- No rate-limit handling beyond what the SDK does for us.
+- Error handling is minimal — if `query()` throws, the UI shows the message and the session may or may not be usable; safest fix is "New chat".

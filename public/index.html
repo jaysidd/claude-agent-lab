@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Command Center</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <aside id="sidebar">
+      <header class="brand">
+        <div class="brand-mark">◆</div>
+        <div>
+          <div class="brand-title">Command Center</div>
+          <div class="brand-sub">Claude Agent SDK</div>
+        </div>
+      </header>
+      <nav id="agent-list"></nav>
+      <footer class="sidebar-footer">
+        <div class="footer-row">
+          <span class="status-dot"></span>
+          <span>Max plan · local</span>
+        </div>
+      </footer>
+    </aside>
+
+    <main id="chat">
+      <header id="chat-header">
+        <div class="chat-header-main">
+          <div id="chat-title">Select an agent</div>
+          <div id="chat-sub">Pick someone from the left to start chatting</div>
+          <button id="cwd-pill" type="button" title="Change project folder">
+            📁 <span id="cwd-label">loading…</span>
+          </button>
+        </div>
+        <div class="header-controls">
+          <select id="model-select" title="Model for this agent"></select>
+          <button id="reset-btn" title="Start a new conversation with this agent">New chat</button>
+        </div>
+      </header>
+      <section id="messages"></section>
+      <form id="composer">
+        <div class="composer-wrap">
+          <textarea
+            id="input"
+            placeholder="Message your agent…  (type @ to reference a file)"
+            rows="1"
+            autocomplete="off"
+            disabled
+          ></textarea>
+          <div id="file-popover" class="hidden"></div>
+        </div>
+        <button id="send" type="submit" disabled>Send</button>
+      </form>
+    </main>
+
+    <div id="cwd-modal" class="modal-overlay hidden">
+      <div class="modal">
+        <header class="modal-header">
+          <div class="modal-title">Set project folder</div>
+          <button id="cwd-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <div class="modal-current">
+            <div class="modal-label">Currently browsing</div>
+            <code id="browse-path"></code>
+          </div>
+          <div class="modal-quick">
+            <button type="button" data-path="~">🏠 Home</button>
+            <button type="button" data-path="~/Desktop">🖥 Desktop</button>
+            <button type="button" data-path="~/Documents">📄 Documents</button>
+            <button type="button" data-path="~/Downloads">⬇ Downloads</button>
+          </div>
+          <ul id="browse-list"></ul>
+          <div class="modal-manual">
+            <input id="cwd-manual" type="text" placeholder="or paste a path like /Users/you/code/my-project" />
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <button id="cwd-cancel" type="button" class="btn-ghost">Cancel</button>
+          <button id="cwd-save" type="button" class="btn-primary">Use this folder</button>
+        </footer>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

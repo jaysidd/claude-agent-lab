@@ -1,0 +1,251 @@
+# Command Center — Claude Code Project Instructions
+
+## What Is This Project
+
+Command Center is a **personal learning lab + mini "command center" dashboard** built directly on the official Anthropic [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Not a wrapper. The SDK *is* the engine.
+
+It pairs a small Express server with a vanilla-JS browser UI to expose the SDK's agent loop in the most visible, hackable way possible. Multi-agent sidebar, per-agent system prompts + tools + models, session persistence, folder selection, `@file` autocomplete. Built in ~15 minutes on 2026-04-23 while evaluating whether the SDK could replace a months-old OpenClaw-based project (Clawless). Verdict: **different problem, different tool** — SDK is Claude-only, OpenClaw is multi-provider. Command Center is the Claude-native side of that comparison, and a sandbox for exploring what the SDK makes easy.
+
+### Authentication model (critical)
+
+- **Personal use, local only.** Runs against the Claude Code CLI's Max subscription via OAuth — no `ANTHROPIC_API_KEY` needed.
+- **Not a shippable product in its current form.** Anthropic's ToS forbids third-party products from offering claude.ai / Pro / Max login to end users. Any commercial version would require switching to user-supplied `ANTHROPIC_API_KEY` and a per-provider auth model (see Clawless, which does this properly).
+- If you change this: set `ANTHROPIC_API_KEY` in the shell, the SDK picks it up automatically.
+
+---
+
+## Architecture (Single-Server)
+
+```
+Browser (vanilla JS)  →  Express server (port 3333)  →  Claude Agent SDK  →  Claude Code CLI
+      │                         │                              │                    │
+      │                  /api/* routes                   query({...})         OAuth session
+      │                         │                              │
+      │                  in-memory state                Max plan subscription
+      │                  (sessions, cwd, overrides)
+```
+
+**One process, one port.** No electron, no IPC bridge, no separate renderer build. `tsx` runs TypeScript directly. Static files serve from `/public`.
+
+**State model**:
+- `sessionByAgent: Map<agentId, sessionId>` — SDK session IDs per agent (`resume:` threads conversations)
+- `modelOverride: Map<agentId, string>` — per-agent model override vs `agents.ts` default
+- `currentCwd: string` — working directory passed to every `query()` call
+- Everything in-memory. Restart = fresh state. Persistent memory is on the backlog (C04).
+
+### API surface
+
+| Route | Method | Purpose |
+|---|---|---|
+| `/api/agents` | GET | List agents with model + defaultModel |
+| `/api/models` | GET | Available models (Opus/Sonnet/Haiku) |
+| `/api/model/:agentId` | POST | Override model for an agent (empty body = reset to default) |
+| `/api/cwd` | GET/POST | Read/set working directory |
+| `/api/browse?path=` | GET | List subdirectories (folder picker) |
+| `/api/files?q=` | GET | List files in cwd (`@file` autocomplete) |
+| `/api/chat` | POST | `{agentId, message}` → `{reply, toolUses, model, apiKeySource, cwd}` |
+| `/api/reset/:agentId` | POST | Clear an agent's session |
+
+---
+
+## Development Team — Six Roles, Fixed Order
+
+Mirrors the Clawless v5 process. Every medium-or-larger task runs through all six roles in sequence. No task is complete until every role signs off.
+
+```
+Architect → Developer → Reviewer → QA → Performance Analyst → Security Analyst
+```
+
+| Role | Fires | Job |
+|------|-------|-----|
+| **Architect** | Before any code | Approves design, flags architectural risks, Go/No-Go |
+| **Developer** | After Architect Go | Implements exactly the approved design |
+| **Reviewer** | After build passes | Audits code correctness from actual source files |
+| **QA** | After Reviewer sign-off | Writes + runs Playwright tests for everything delivered |
+| **Performance Analyst** | After QA sign-off | Profiles hot paths, bundle size, latency, dead code |
+| **Security Analyst** | After Performance sign-off | Threat model; surface risks to the user explicitly |
+
+### Architect checks (Command Center specific)
+- Does it stay on the SDK — not wrap OpenClaw/OpenAI/etc.? (Multi-provider work belongs in Clawless, not here.)
+- Does it respect the SDK's mental model (agent loop, tool use, sessions), or fight it?
+- Is it the minimum that teaches the concept, or is it over-engineered?
+- Simpler approach that reuses what the SDK gives us for free?
+
+### Reviewer checks
+- All new routes return structured JSON; errors carry `{error: string}` with appropriate status
+- `query()` options are complete (`allowedTools`, `systemPrompt`, `cwd`, `resume`, `model`) and type-safe
+- Session IDs captured from init message, not guessed or invented
+- UI state changes are functional (no direct DOM scraping for app state)
+- Frontend gracefully handles agent errors (shows message in chat, doesn't freeze UI)
+
+### QA test categories (Playwright, see `/tests`)
+Smoke · Agent chat · Session persistence · Model switching · Folder scoping · `@file` autocomplete · Error states
+
+Every user-visible feature gets at least one Playwright test.
+
+### Performance checks
+- Streaming latency (once C02 lands): time-to-first-token target < 3s for Sonnet, < 5s for Opus
+- No blocking work on main UI thread; all SDK calls async
+- Session resume doesn't balloon the context window (track usage from result messages)
+- Vanilla JS stays vanilla — no framework bloat creeping in
+
+### Security checks
+- Path traversal on `/api/cwd`, `/api/browse`, `/api/files` — resolved paths must stay under the user's control
+- Prompt injection: tool outputs (Read on arbitrary files) can attempt to hijack the agent; don't auto-escalate tool allowlists based on model output
+- No secrets logged to console or returned in API responses
+- If/when API key support lands (C?? for commercial path): keys never round-trip through the renderer
+
+### Skip rules — by task size
+- **Cosmetic** (CSS tweak, copy change, docs-only): Reviewer only.
+- **Small** (single-file logic fix, no new surface): Architect + Developer + Reviewer. Ask before skipping QA.
+- **Medium-or-larger** (any new route, any new user surface, refactor across files): all six, no skips.
+- Reviewer is **never** skipped.
+- When in doubt, ask.
+
+### End-of-session pattern
+When wrapping a session, spawn Performance Analyst and Security Analyst as background agents (`run_in_background: true`). Their reports land in `handoff.md` for the next session.
+
+---
+
+## Key Rules
+
+### What we ARE
+- A direct Claude Agent SDK app. No abstraction layer between us and the SDK.
+- A learning lab *and* a mini product. Both purposes co-exist on the same codebase.
+- Claude-only. Opus / Sonnet / Haiku, via the official SDK.
+
+### What we are NOT
+- **Not multi-provider.** If you want OpenAI/OpenRouter/Ollama, that's Clawless territory (OpenClaw engine). Command Center stays Claude-only by design.
+- Not a re-implementation of Claude Code. The SDK *is* Claude Code's loop exposed as a library.
+- Not commercial in its current auth form. Max-plan OAuth is personal-only.
+
+### Code rules
+- **Package manager**: `npm` (not bun). Small project, no build pipeline, no reason to diverge.
+- **Runtime**: `tsx` for TypeScript directly. No compile step.
+- **Style**: minimal, functional, vanilla. No React on the frontend — keep the SDK concepts visible.
+- **SDK options**: always pass `allowedTools`, `systemPrompt`, `model`, `cwd`. Pass `resume` when continuing a conversation.
+- **Session capture**: read `session_id` off the first `system.init` message in the SDK message stream.
+- **Tool use**: forward `tool_use` blocks to the UI for visible trace — the "thinking" should be legible.
+
+### Commit conventions
+- **Commit early and often.** After every successful feature that passes a smoke test, commit.
+- Never batch unrelated changes.
+- End every commit with `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`.
+
+---
+
+## Documentation Update Protocol
+
+After any major change, update before the session ends:
+
+1. **`handoff.md`** — current state, what changed this session, what's next
+2. **`backlog.md`** — move completed items to Done, add new items discovered during work
+3. **`architecture.md`** — new design decisions, updated file map
+4. **`docs/case-studies/`** *(when useful)* — case studies for patterns discovered, iteration loops, decisions worth documenting
+5. **`docs/drafts/`** *(when useful)* — LinkedIn draft per session. Style: measured optimism, personal reflection, ends with a question.
+
+### What counts as a "major change"
+- New API route or user-facing surface
+- New SDK option wired in (hooks, sub-agents, MCP, etc.)
+- Refactor affecting multiple files
+- New dependency
+
+---
+
+## Dev Server Protocol
+
+After any change to `src/server.ts` or `src/agents.ts`, restart automatically:
+
+```bash
+lsof -ti:3333 | xargs kill -9 2>/dev/null
+cd "/Users/junaidsiddiqi/Desktop/claude-agent-lab" && npm run serve &
+```
+
+Frontend changes (`public/*.html|css|js`) need only a browser reload — no server restart.
+
+Tell the user: "Restarted the server — reload the browser to pick up changes."
+
+---
+
+## Launching the App
+
+```bash
+cd "/Users/junaidsiddiqi/Desktop/claude-agent-lab"
+npm install          # if node_modules missing
+npm run serve        # starts Express on :3333
+open http://localhost:3333/
+```
+
+Prereqs:
+- Node 20+ (tested on 24.14.1)
+- `claude` CLI installed and logged in (Max plan OAuth)
+- `ANTHROPIC_API_KEY` NOT set in shell (unset lets OAuth take over)
+
+---
+
+## Project Structure
+
+```
+claude-agent-lab/
+├── src/
+│   ├── agents.ts        # Agent definitions (systemPrompt, tools, model)
+│   ├── server.ts        # Express + SDK glue (~180 LOC)
+│   └── hello.ts         # First smoke test — URL-summarizer agent
+├── public/
+│   ├── index.html       # Dashboard markup
+│   ├── style.css        # Dark command-center theme
+│   └── app.js           # Frontend logic (vanilla JS)
+├── tests/               # Playwright tests (added in C06)
+├── docs/
+│   ├── case-studies/    # Patterns, iterations, decisions
+│   └── drafts/          # LinkedIn drafts per session
+├── CLAUDE.md            # This file
+├── architecture.md      # Technical architecture
+├── backlog.md           # Sequential backlog (C##)
+├── handoff.md           # Session-to-session continuity
+├── package.json
+├── tsconfig.json
+└── .gitignore
+```
+
+---
+
+## Documentation Files
+
+| File | Purpose |
+|------|---------|
+| `CLAUDE.md` | This file — project rules and quick reference |
+| `backlog.md` | Feature backlog prioritized by importance (C##) |
+| `architecture.md` | Technical architecture and design decisions |
+| `handoff.md` | Session handoff notes for continuity |
+
+---
+
+## User Preferences
+
+- Same six-role dev-team flow as Clawless.
+- Package manager: `npm` (not bun — small project, no build pipeline).
+- Commits: early and often, never batch, with `Co-Authored-By` footer.
+- Don't reinvent what the SDK gives for free — use its `agents`, `hooks`, `resume`, `cwd`, `model`, etc.
+- **Don't confuse this with Clawless.** Clawless is the commercial multi-provider product; Command Center is the Claude-only personal lab. Different goals, different constraints.
+
+---
+
+## Current Status (as of 2026-04-23)
+
+### Completed
+- F1 Express + SDK scaffold
+- F2 Multi-agent sidebar (Main / Comms / Content / Ops)
+- F3 Per-agent system prompts, tool allowlists, session persistence
+- F4 Folder picker + cwd scoping
+- F5 `@file` autocomplete
+- F6 Model selector per agent (Opus/Sonnet/Haiku, with defaults)
+- F7 Model + auth footer on each reply
+
+### Next up (backlog)
+- **C01** Sub-agent delegation (Main auto-routes to Comms/Content/Ops via SDK `agents:` option)
+- **C02** Streaming responses (token-by-token via SSE)
+- **C03** Task queue with LLM auto-routing
+- **C04** Persistent memory (SQLite)
+- **C05** Telegram bridge
+- **C06** Playwright smoke tests
