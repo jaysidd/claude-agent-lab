@@ -1,8 +1,8 @@
 # Command Center — Sequential Backlog
 
-> Last Updated: 2026-04-23
+> Last Updated: 2026-04-23 (autonomous session)
 > Total items: 13 (7 foundation + 6 queued features + future list)
-> Completed: F1–F7 foundation
+> Completed: F1–F7 foundation + C01 + C02 + C03 + C06
 
 > **Work order**: Items are numbered C##. Complete them in order unless a higher-priority need lands.
 >
@@ -33,7 +33,7 @@
 
 ### C01 — Sub-agent delegation (Main auto-routes to specialists)
 
-- [ ] **Status**: Not started
+- [x] **Status**: DONE (2026-04-23)
 - **Priority**: HIGH. This is the single biggest "aha" for the command-center pattern.
 - **Effort**: Medium (1 session). Uses the SDK's native `agents:` option — no custom routing code.
 
@@ -62,7 +62,7 @@ Right now Main just *tells* the user "you should ask Comms about that." The SDK 
 
 ### C02 — Streaming responses (SSE, token-by-token)
 
-- [ ] **Status**: Not started
+- [x] **Status**: DONE (2026-04-23)
 - **Priority**: HIGH. Biggest perceived-speed win; also makes the agent feel "alive" during long tool chains.
 - **Effort**: Medium (1 session).
 
@@ -89,7 +89,7 @@ Current `/api/chat` waits for the full SDK stream to complete, then returns JSON
 
 ### C03 — Task queue with LLM auto-routing
 
-- [ ] **Status**: Not started
+- [x] **Status**: DONE (2026-04-23)
 - **Priority**: MEDIUM. High visual impact, matches the YouTube demo's "create task" flow.
 - **Effort**: Medium (1 session).
 
@@ -179,7 +179,7 @@ The whole pitch of the SDK is: same engine, any interface. Running alongside the
 
 ### C06 — Playwright smoke tests
 
-- [ ] **Status**: Not started
+- [x] **Status**: DONE (2026-04-23). 7 smoke + 2 @engine tests, all passing.
 - **Priority**: HIGH. Without tests the next refactor risks breaking the flows we just built.
 - **Effort**: Small-Medium (1 session).
 
@@ -219,20 +219,30 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 
 | Item | Notes |
 |---|---|
-| **Voice layer** | Pipecat / Gemini Live for voice I/O. Matches the "war room" idea from the YouTube video. Large effort; ties into streaming. |
-| **Slash commands** | `/clear`, `/model`, `/compact`, `/agents`. Maps naturally to existing Claude Code slash command syntax. |
-| **Skills panel** | SDK loads `.claude/skills/*/SKILL.md` automatically if cwd contains them. Add a UI to browse and toggle. |
-| **MCP configuration UI** | Let the user point at an MCP server (stdio or HTTP) and have it light up as a tool for a chosen agent. |
-| **Conversation export** | Download chat history as markdown or JSON. |
-| **Multiple workspaces** | Switch between project contexts (different cwd + memory partition) without losing state. |
-| **Hook inspector** | Visualize which hooks fired during a turn (PreToolUse, PostToolUse, etc.). |
-| **File rewind** | Expose the SDK's `Query.rewindFiles()` — roll files back to state at any prior user message. Trust-building for destructive Ops work. |
-| **Right-panel file viewer** | Inline viewer for files Ops Reads, so user sees what the agent saw. |
-| **Cost & usage tracking** | Show tokens in/out per turn, total per session. |
-| **Cron / scheduled tasks** | Morning briefing, end-of-day summary, etc. Pair with C03 Task queue. |
-| **Multi-pane chat** | Split view: two agents side-by-side for model comparison or parallel work. |
-| **Sub-agent depth limit** | Prevent runaway delegation chains once C01 lands. |
-| **Auth profile switcher** | Toggle between "personal (OAuth)" and "development (API key)" modes for testing the commercial path. |
+| **Markdown rendering in chat** | HIGH impact, SMALL effort. Agent replies are plain text; `marked` or similar + a syntax-highlighted code block renderer (hljs or shiki) would massively improve legibility, especially for Content and Ops output. |
+| **Inline AskUserQuestion UI** | SDK exposes an `AskUserQuestion` tool that pauses mid-task with multiple-choice prompts. Wire this up in the streaming pipeline so mid-run disambiguation shows up as an interactive card. |
+| **Plan mode toggle** | SDK supports `permissionMode: 'plan'` for read-only agent runs. One toggle per agent — huge trust multiplier for Ops. |
+| **File checkpoint + rewind** | Expose `Query.rewindFiles()` as a "roll back to this turn" button on any user message. SDK native feature; OpenClaw doesn't have this. Differentiator. |
+| **Slash commands** | `/clear`, `/model`, `/compact`, `/agents`, `/help`. Maps to Claude Code's native syntax. Users who know the CLI get muscle memory. |
+| **Skills panel** | SDK loads `.claude/skills/*/SKILL.md` automatically if cwd contains them. Add UI to browse and toggle per agent. |
+| **MCP configuration UI** | Point at a stdio or HTTP MCP server → light up as tools for chosen agent. The SDK's MCP primitive is the gateway to infinite integrations. |
+| **Session history sidebar** | List past conversations per agent; click to restore via `resume:`. Goes hand-in-hand with C04 persistent memory. |
+| **Context pinning per agent** | "Always consider my writing-style doc when drafting." A pinned file or snippet prepended to every turn for that agent. |
+| **Cost & token tracking** | SDK's `ResultMessage` has usage info. Per-turn tokens, running total, forecast cost. Especially useful when the commercial path unlocks API-key mode. |
+| **Conversation export** | Download chat history as markdown or JSON. One-click share. |
+| **Multi-pane chat** | Split view — two agents side-by-side for model comparison or parallel work. Matches the YouTube "mission control" vibe. |
+| **Cron / scheduled tasks** | "Every morning at 8, run Ops on ~/Projects/ and DM me via Telegram." Pair with C03 and C05. |
+| **Right-panel file viewer** | When Ops reads a file, show it inline in a side pane so the user sees what the agent saw. Debugging + trust. |
+| **Keyboard shortcuts** | Cmd+K switch agent, Cmd+Enter send, Cmd+T tasks, Cmd+F folder. Muscle-memory speed boost. |
+| **Voice layer** | Whisper STT for input, TTS for output. Optional Pipecat/Gemini Live for a "war room" experience. Large effort; only worth it after the written flow is polished. |
+| **"Council" mode** | One prompt → multiple agents weigh in → synthesizer produces a consolidated answer. Good for decisions. |
+| **Hook inspector** | Render PreToolUse/PostToolUse/Stop events as a timeline for each turn. Developer-facing, but teaches the SDK's event model. |
+| **Multiple workspaces** | Switch between project contexts (different cwd + memory partition) without losing state. Matches how devs actually work. |
+| **Sub-agent depth limit** | Prevent runaway delegation chains. Currently no limit — a pathological prompt could cascade. |
+| **Auth profile switcher** | Toggle between "personal (OAuth, Max)" and "dev (API key)" modes for testing the commercial path end-to-end. |
+| **AskUserQuestion from hooks** | Let hooks ask the user for approval mid-tool-run (e.g., before a destructive Bash command). |
+| **Per-agent avatar / personality** | One-click tone shifts: formal / casual / concise / playful. Stored as preamble injection. |
+| **Onboarding tour** | 5-step first-run flow that highlights sidebar, chat, folder, tasks, model selector. |
 
 ---
 
@@ -242,3 +252,7 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 |---|---|---|
 | 2026-04-23 | F1–F7 shipped | Full foundation in one session. Express + SDK + vanilla UI, ~1,100 LOC. |
 | 2026-04-23 | Docs scaffolded | CLAUDE.md + architecture.md + backlog.md + handoff.md, mirroring Clawless v5 conventions. |
+| 2026-04-23 | C01 DONE | Sub-agent delegation via SDK `agents` option. Main routes to Comms/Content/Ops. Delegation chips in UI. Commit `38bd113`. |
+| 2026-04-23 | C02 DONE | Streaming responses via `includePartialMessages: true`. NDJSON events from `/api/chat/stream`; blinking-cursor UI. Commit `b359d4c`. |
+| 2026-04-23 | C03 DONE | Task queue with Haiku-classified auto-routing. 3-column board, priority, agent override. Commit `9e4142e`. |
+| 2026-04-23 | C06 DONE | Playwright smoke + engine projects. 7 smoke (no engine) + 2 @engine tests. `npm run test:smoke` / `test:engine`. |

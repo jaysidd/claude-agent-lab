@@ -43,16 +43,19 @@ One OS process. No IPC, no WebSockets (yet), no secondary server. The `claude` b
 
 | Path | Role | LOC |
 |---|---|---|
-| `src/server.ts` | Express app, API routes, SDK call site | ~180 |
-| `src/agents.ts` | Agent configs (id, name, systemPrompt, tools, model) | ~80 |
+| `src/server.ts` | Express app, API routes, SDK call sites (chat, chat/stream, tasks, cwd, files, model) + classifier | ~300 |
+| `src/agents.ts` | Agent configs + router helper (`subAgentsFor`) | ~120 |
 | `src/hello.ts` | One-shot URL summarizer (smoke test) | ~15 |
-| `public/index.html` | UI markup | ~65 |
-| `public/style.css` | Dark command-center theme | ~380 |
-| `public/app.js` | Frontend logic: agents, chat, folder picker, @file | ~370 |
+| `public/index.html` | UI markup (sidebar, chat, folder modal, task modal) | ~100 |
+| `public/style.css` | Dark command-center theme | ~580 |
+| `public/app.js` | Frontend logic: agents, streaming chat, folder picker, @file, task board | ~620 |
+| `playwright.config.ts` | Two projects: smoke (offline) + engine (@engine-tagged, real SDK) | — |
+| `tests/smoke.spec.ts` | 7 offline UI tests | — |
+| `tests/chat.spec.ts` | 2 @engine tests (streaming chat, task classification) | — |
 | `package.json` | npm scripts + deps | — |
 | `tsconfig.json` | TS config (ESM, ES2022, strict) | — |
 
-Total hand-written: ~1,100 LOC across the whole project. By design. Everything the SDK gives us for free stays in the SDK.
+Total hand-written: ~1,800 LOC across the whole project. By design. Everything the SDK gives us for free stays in the SDK.
 
 ---
 
@@ -74,6 +77,23 @@ This duality is deliberate. Cleaner than trying to persist + sync. Persistence i
 ---
 
 ## API contract
+
+### `POST /api/chat/stream` (C02)
+Same body as `/api/chat`; returns NDJSON (one JSON object per line). Event `kind` field:
+- `init` — `{sessionId, model, apiKeySource}` captured from SDK init
+- `text_delta` — `{text}` incremental assistant text from `includePartialMessages: true`
+- `tool_use` — `{name, input}` tool invocation (Agent = delegation)
+- `result` — `{text}` authoritative final text
+- `error` — `{message}`
+- `done` — end of stream
+
+Used by the UI for token-by-token rendering. Original `/api/chat` retained for tests and fallback.
+
+### `GET /api/tasks` / `POST /api/task` / `POST /api/task/:id/run` / `DELETE /api/task/:id` (C03)
+- Create → classifier (Haiku) picks an agent unless caller supplies `agentId` override
+- Run → executes task via `query()` with the assigned agent's config; **no `resume:`** (fresh context per task)
+- Task state machine: `queued → active → done | error`
+- Task includes `createdAt`, `startedAt`, `completedAt`, `result`, `error`
 
 ### `POST /api/chat`
 Request:

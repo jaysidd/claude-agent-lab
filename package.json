@@ -5,7 +5,10 @@
   "main": "index.js",
   "scripts": {
     "start": "tsx src/hello.ts",
-    "serve": "tsx src/server.ts"
+    "serve": "tsx src/server.ts",
+    "test": "playwright test",
+    "test:smoke": "playwright test --project=smoke",
+    "test:engine": "playwright test --project=engine"
   },
   "keywords": [],
   "author": "",
@@ -16,6 +19,7 @@
     "express": "^5.2.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/express": "^5.0.6",
     "@types/node": "^25.6.0",
     "tsx": "^4.21.0",
