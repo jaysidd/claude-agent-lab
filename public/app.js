@@ -125,7 +125,13 @@ function renderMessages() {
 
     const body = document.createElement("div");
     body.className = "msg-body";
-    body.textContent = m.text;
+    if (m.streaming && !m.text) {
+      body.classList.add("streaming-empty");
+      body.textContent = "…";
+    } else {
+      body.textContent = m.text;
+      if (m.streaming) body.classList.add("streaming");
+    }
     row.appendChild(body);
 
     if (m.toolUses && m.toolUses.length) {
@@ -165,13 +171,6 @@ function renderMessages() {
     messagesEl.appendChild(row);
   }
 
-  if (state.pending) {
-    const thinking = document.createElement("div");
-    thinking.className = "thinking";
-    thinking.textContent = "thinking";
-    messagesEl.appendChild(thinking);
-  }
-
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
@@ -183,24 +182,56 @@ async function sendMessage(text) {
   state.pending = true;
   renderMessages();
 
+  // Insert an empty agent bubble we'll fill incrementally
+  const agentMsg = { role: "agent", text: "", toolUses: [], streaming: true };
+  history.push(agentMsg);
+  renderMessages();
+
   try {
-    const res = await fetch("/api/chat", {
+    const res = await fetch("/api/chat/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ agentId, message: text }),
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "server error");
-    history.push({
-      role: "agent",
-      text: data.reply,
-      toolUses: data.toolUses,
-      model: data.model,
-      apiKeySource: data.apiKeySource,
-    });
+    if (!res.ok || !res.body) throw new Error("server error (status " + res.status + ")");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop() ?? "";
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let ev;
+        try {
+          ev = JSON.parse(line);
+        } catch {
+          continue;
+        }
+        if (ev.kind === "init") {
+          agentMsg.model = ev.model;
+          agentMsg.apiKeySource = ev.apiKeySource;
+        } else if (ev.kind === "text_delta") {
+          agentMsg.text += ev.text;
+        } else if (ev.kind === "tool_use") {
+          agentMsg.toolUses.push({ name: ev.name, input: ev.input });
+        } else if (ev.kind === "result") {
+          if (!agentMsg.text) agentMsg.text = ev.text;
+        } else if (ev.kind === "error") {
+          agentMsg.text = `⚠️ ${ev.message}`;
+        }
+        renderMessages();
+      }
+    }
   } catch (err) {
-    history.push({ role: "agent", text: `⚠️ ${err.message}` });
+    agentMsg.text = `⚠️ ${err.message}`;
   } finally {
+    agentMsg.streaming = false;
     state.pending = false;
     renderMessages();
   }

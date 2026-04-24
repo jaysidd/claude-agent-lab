@@ -266,6 +266,19 @@ body {
   background: var(--panel);
   border: 1px solid var(--border);
 }
+.msg.agent .msg-body.streaming::after {
+  content: "▌";
+  color: var(--accent);
+  margin-left: 2px;
+  animation: blink 1s steps(2) infinite;
+}
+.msg.agent .msg-body.streaming-empty {
+  color: var(--muted);
+  letter-spacing: 0.3em;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+@keyframes pulse { 50% { opacity: 0.5; } }
 
 .msg-meta { font-size: 11px; color: var(--muted); padding: 0 6px; }
 

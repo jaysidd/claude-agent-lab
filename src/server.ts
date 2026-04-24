@@ -181,6 +181,84 @@ app.post("/api/chat", async (req, res) => {
   });
 });
 
+app.post("/api/chat/stream", async (req, res) => {
+  const { agentId, message } = req.body ?? {};
+  const agent = AGENTS[agentId];
+  if (!agent) return res.status(400).json({ error: "unknown agent" });
+  if (typeof message !== "string" || !message.trim()) {
+    return res.status(400).json({ error: "empty message" });
+  }
+
+  res.setHeader("Content-Type", "application/x-ndjson");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  (res as any).flushHeaders?.();
+
+  const write = (event: any) => res.write(JSON.stringify(event) + "\n");
+
+  const resumeId = sessionByAgent.get(agent.id);
+  const modelId = effectiveModel(agent.id);
+  const subAgents = subAgentsFor(agent.id);
+
+  let newSessionId: string | undefined;
+
+  try {
+    for await (const msg of query({
+      prompt: message,
+      options: {
+        allowedTools: agent.allowedTools,
+        systemPrompt: agent.systemPrompt,
+        resume: resumeId,
+        cwd: currentCwd,
+        model: modelId,
+        includePartialMessages: true,
+        ...(subAgents ? { agents: subAgents } : {}),
+      },
+    })) {
+      const anyMsg = msg as any;
+
+      if (anyMsg.type === "system" && anyMsg.subtype === "init") {
+        newSessionId = anyMsg.session_id ?? anyMsg.data?.session_id;
+        write({
+          kind: "init",
+          sessionId: newSessionId,
+          model: anyMsg.model ?? anyMsg.data?.model,
+          apiKeySource: anyMsg.apiKeySource ?? anyMsg.data?.apiKeySource,
+        });
+        continue;
+      }
+
+      if (anyMsg.type === "stream_event") {
+        const ev = anyMsg.event;
+        if (ev?.type === "content_block_delta" && ev.delta?.type === "text_delta") {
+          write({ kind: "text_delta", text: ev.delta.text });
+        }
+        continue;
+      }
+
+      if (anyMsg.type === "assistant" && Array.isArray(anyMsg.message?.content)) {
+        for (const block of anyMsg.message.content) {
+          if (block.type === "tool_use") {
+            write({ kind: "tool_use", name: block.name, input: block.input });
+          }
+        }
+        continue;
+      }
+
+      if ("result" in anyMsg && typeof anyMsg.result === "string") {
+        write({ kind: "result", text: anyMsg.result });
+      }
+    }
+  } catch (err: any) {
+    console.error("stream error:", err);
+    write({ kind: "error", message: err?.message ?? "agent error" });
+  }
+
+  if (newSessionId) sessionByAgent.set(agent.id, newSessionId);
+  write({ kind: "done" });
+  res.end();
+});
+
 app.post("/api/reset/:agentId", (req, res) => {
   sessionByAgent.delete(req.params.agentId);
   res.json({ ok: true });
