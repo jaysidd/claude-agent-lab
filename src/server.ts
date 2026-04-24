@@ -50,7 +50,6 @@ import {
   listMemories,
   createMemory,
   deleteMemory,
-  clearMemories,
   augmentedSystemPrompt,
 } from "./memory.js";
 import {
@@ -261,7 +260,6 @@ app.post("/api/chat", async (req, res) => {
         resume: resumeId,
         cwd: currentCwd,
         model: modelId,
-        enableFileCheckpointing: true,
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
       },
@@ -350,7 +348,6 @@ app.post("/api/chat/stream", async (req, res) => {
         model: modelId,
         includePartialMessages: true,
         abortController: ac,
-        enableFileCheckpointing: true,
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
       },
@@ -417,6 +414,10 @@ app.get("/api/memories", (req, res) => {
 app.post("/api/memories", (req, res) => {
   try {
     const { content, agentId, category } = req.body ?? {};
+    // Validate agentId against the combined registry (built-ins + custom)
+    if (agentId && !findAgent(agentId)) {
+      return res.status(400).json({ error: "unknown agent" });
+    }
     const mem = createMemory({
       content,
       agentId: agentId || null,
@@ -434,18 +435,7 @@ app.delete("/api/memories/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete("/api/memories", (_req, res) => {
-  const count = clearMemories();
-  res.json({ ok: true, cleared: count });
-});
-
 // ----- Plan mode -----
-
-app.get("/api/plan/:agentId", (req, res) => {
-  const agentId = req.params.agentId;
-  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
-  res.json({ agentId, enabled: planMode.get(agentId) === true });
-});
 
 app.post("/api/plan/:agentId", (req, res) => {
   const agentId = req.params.agentId;
@@ -464,7 +454,11 @@ app.get("/api/tasks", (_req, res) => {
 });
 
 app.post("/api/task", async (req, res) => {
-  const description = (req.body?.description ?? "").toString().trim();
+  const rawDesc = req.body?.description;
+  if (typeof rawDesc !== "string") {
+    return res.status(400).json({ error: "description must be a string" });
+  }
+  const description = rawDesc.trim();
   const priority = (req.body?.priority ?? "medium") as TaskPriority;
   const agentOverride = req.body?.agentId as string | undefined;
   if (!description) return res.status(400).json({ error: "description required" });
@@ -524,7 +518,6 @@ app.post("/api/task/:id/run", async (req, res) => {
         systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         cwd: currentCwd,
         model: effectiveModel(agent.id),
-        enableFileCheckpointing: true,
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
       },
@@ -573,18 +566,6 @@ app.get("/api/whisprdesk/status", async (_req, res) => {
     res.json({ configured: true, reachable: r.ok, upstream: body });
   } catch (err: any) {
     res.json({ configured: true, reachable: false, error: err?.message ?? "fetch failed" });
-  }
-});
-
-app.get("/api/whisprdesk/capabilities", async (_req, res) => {
-  const { url, token } = whisprdeskConfig();
-  if (!token) return res.status(400).json({ error: "WhisprDesk token not set" });
-  try {
-    const r = await fetch(`${url}/v1/capabilities`);
-    const body = await r.json().catch(() => ({}));
-    res.status(r.status).json(body);
-  } catch (err: any) {
-    res.status(502).json({ error: err?.message ?? "upstream failed" });
   }
 });
 
@@ -699,10 +680,6 @@ app.post("/api/settings", (req, res) => {
   res.json({ ok: true, changed });
 });
 
-app.delete("/api/settings/:key", (req, res) => {
-  const ok = deleteSetting(req.params.key);
-  res.json({ ok });
-});
 
 // ----- Custom agents CRUD -----
 

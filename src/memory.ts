@@ -4,7 +4,6 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
-import { AGENTS } from "./agents.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DB_DIR = path.join(__dirname, "..", "data");
@@ -66,9 +65,9 @@ export function createMemory(input: {
 }): Memory {
   const content = input.content.trim();
   if (!content) throw new Error("content required");
-  if (input.agentId && !AGENTS[input.agentId] && input.agentId !== null) {
-    throw new Error("unknown agent");
-  }
+  // NOTE: agent-id validation is done by the caller (server.ts) against the
+  // combined agent registry (built-ins + custom), which lives higher in the
+  // dependency graph. memory.ts stays dependency-free to avoid circular imports.
   const category: MemoryCategory = ALLOWED_CATEGORIES.includes(
     input.category as MemoryCategory,
   )

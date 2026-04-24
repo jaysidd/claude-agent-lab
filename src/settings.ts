@@ -85,8 +85,10 @@ export function configValue(dbKey: string, envKey?: string): string | undefined 
 
 // Known setting schema — the UI uses this to render the Settings form
 // and know which fields are secrets.
-export const SETTINGS_SCHEMA: Array<{
+export type SettingsSection = {
   section: string;
+  disabled?: boolean;
+  disabledNote?: string;
   fields: Array<{
     key: string;
     label: string;
@@ -96,7 +98,9 @@ export const SETTINGS_SCHEMA: Array<{
     type?: "text" | "password" | "textarea";
     help?: string;
   }>;
-}> = [
+};
+
+export const SETTINGS_SCHEMA: SettingsSection[] = [
   {
     section: "WhisprDesk (voice)",
     fields: [
@@ -106,7 +110,7 @@ export const SETTINGS_SCHEMA: Array<{
         placeholder: "http://127.0.0.1:9879",
         envFallback: "WHISPRDESK_URL",
         type: "text",
-        help: "Default is WhisprDesk's local gateway address.",
+        help: "Default is WhisprDesk's local gateway address. Change if you run WhisprDesk on a different port or host.",
       },
       {
         key: "whisprdesk.token",
@@ -121,6 +125,9 @@ export const SETTINGS_SCHEMA: Array<{
   },
   {
     section: "Telegram bridge",
+    disabled: true,
+    disabledNote:
+      "Coming in C05 — the bridge code isn't shipped yet. Saving here won't do anything until the listener lands.",
     fields: [
       {
         key: "telegram.bot_token",
@@ -129,7 +136,7 @@ export const SETTINGS_SCHEMA: Array<{
         envFallback: "TELEGRAM_BOT_TOKEN",
         isSecret: true,
         type: "password",
-        help: "Create a bot at @BotFather on Telegram. Leave blank to keep existing.",
+        help: "Create a bot at @BotFather on Telegram.",
       },
       {
         key: "telegram.allowed_chat_ids",
@@ -137,7 +144,7 @@ export const SETTINGS_SCHEMA: Array<{
         placeholder: "12345,67890  (comma-separated)",
         envFallback: "TELEGRAM_ALLOWED_CHAT_IDS",
         type: "text",
-        help: "Only these chat IDs can message the bot. Leave empty to disable the bridge.",
+        help: "Only these chat IDs will be allowed to message the bot.",
       },
     ],
   },

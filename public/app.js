@@ -445,8 +445,12 @@ modelSelect.addEventListener("change", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ model: newModel }),
     });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
+    if (!data.model) throw new Error("server returned no model");
     // Update local agent record + clear that agent's chat (session was reset server-side)
     const agent = state.agents.find((a) => a.id === state.activeAgentId);
     if (agent) agent.model = data.model;
@@ -886,8 +890,14 @@ async function openMemoryModal() {
 }
 
 async function refreshMemories() {
-  const res = await fetch("/api/memories");
-  state.memories = await res.json();
+  try {
+    const res = await fetch("/api/memories");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.memories = await res.json();
+  } catch (err) {
+    console.warn("refreshMemories failed:", err);
+    state.memories = [];
+  }
   renderMemories();
 }
 
@@ -1225,9 +1235,18 @@ function openAgentEditor(id) {
   agentDeleteBtn.classList.remove("hidden");
   // Fetch the full record (including system prompt, which /api/agents list omits)
   fetch(`/api/agents/${id}`)
-    .then((r) => r.json())
+    .then((r) => {
+      if (!r.ok) throw new Error(`failed to load agent (${r.status})`);
+      return r.json();
+    })
     .then((full) => {
       agentSystemPromptInput.value = full.systemPrompt || "";
+    })
+    .catch((err) => {
+      console.warn("agent editor: could not load full record:", err);
+      agentSystemPromptInput.value = "";
+      agentSystemPromptInput.placeholder =
+        "(failed to load saved prompt — type a new one to overwrite)";
     });
   agentModal.classList.remove("hidden");
 }
@@ -1344,10 +1363,23 @@ function renderSettings() {
 
   for (const section of settingsState.schema) {
     const secEl = document.createElement("div");
-    secEl.className = "settings-section";
+    secEl.className = "settings-section" + (section.disabled ? " disabled" : "");
     const h = document.createElement("h3");
     h.textContent = section.section;
+    if (section.disabled) {
+      const badge = document.createElement("span");
+      badge.className = "section-badge";
+      badge.textContent = "coming soon";
+      h.appendChild(badge);
+    }
     secEl.appendChild(h);
+
+    if (section.disabled && section.disabledNote) {
+      const note = document.createElement("p");
+      note.className = "section-disabled-note";
+      note.textContent = section.disabledNote;
+      secEl.appendChild(note);
+    }
 
     for (const field of section.fields) {
       const fieldEl = document.createElement("div");
@@ -1377,6 +1409,10 @@ function renderSettings() {
       inp.dataset.key = field.key;
       inp.dataset.secret = field.isSecret ? "1" : "0";
       inp.placeholder = field.placeholder ?? "";
+      if (section.disabled) {
+        inp.disabled = true;
+        inp.dataset.disabled = "1";
+      }
       if (!field.isSecret && current?.hasValue) {
         inp.value = current.preview || "";
       }
@@ -1419,6 +1455,7 @@ function renderSettings() {
 async function saveSettings() {
   const entries = [];
   for (const inp of settingsSectionsEl.querySelectorAll("[data-key]")) {
+    if (inp.dataset.disabled === "1") continue; // skip disabled sections
     const key = inp.dataset.key;
     const isSecret = inp.dataset.secret === "1";
     const value = inp.value;

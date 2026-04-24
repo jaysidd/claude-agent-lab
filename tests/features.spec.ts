@@ -2,12 +2,15 @@ import { test, expect, type Page } from "@playwright/test";
 
 test.describe("Command Center — new features smoke (no engine)", () => {
   test("memory panel: open, add, list, delete", async ({ page, request }) => {
-    // Clean slate
-    await request.delete("http://localhost:3333/api/memories");
+    // Clean slate — iterate and delete
+    const existing = await (await request.get("http://localhost:3333/api/memories")).json();
+    for (const m of existing) {
+      await request.delete(`http://localhost:3333/api/memories/${m.id}`);
+    }
 
     await page.goto("/");
     await page.locator("#memory-btn").click();
-    await expect(page.locator("#memory-modal")).toBeVisible();
+    await expect(page.locator("#memory-modal")).toBeVisible({ timeout: 5_000 });
 
     await page.locator("#memory-content").fill("Likes concise replies");
     await page.locator("#memory-create-btn").click();
@@ -59,7 +62,7 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     await expect(page.locator("#model-select")).toHaveValue(/sonnet/i, { timeout: 5_000 });
   });
 
-  test("plan mode toggle turns on and off", async ({ page, request }) => {
+  test("plan mode toggle turns on and off", async ({ page }) => {
     await page.goto("/");
     await page.locator(".agent-item", { hasText: "Ops" }).click();
 
@@ -69,9 +72,6 @@ test.describe("Command Center — new features smoke (no engine)", () => {
 
     await checkbox.check();
     await expect(toggle).toHaveClass(/active/);
-
-    const statusRes = await request.get("http://localhost:3333/api/plan/ops");
-    expect(await statusRes.json()).toMatchObject({ enabled: true });
 
     await checkbox.uncheck();
     await expect(toggle).not.toHaveClass(/active/);
@@ -129,6 +129,66 @@ test.describe("Command Center — new features smoke (no engine)", () => {
 
     // Clean up
     await request.delete("http://localhost:3333/api/settings/whisprdesk.url");
+  });
+
+  test("built-in agents are read-only — PATCH and DELETE return 400", async ({ request }) => {
+    const patch = await request.patch("http://localhost:3333/api/agents/main", {
+      data: { description: "hijacked" },
+    });
+    expect(patch.status()).toBe(400);
+    const patchBody = await patch.json();
+    expect(patchBody.error).toMatch(/built-in/i);
+
+    const del = await request.delete("http://localhost:3333/api/agents/main");
+    expect(del.status()).toBe(400);
+    const delBody = await del.json();
+    expect(delBody.error).toMatch(/built-in/i);
+  });
+
+  test("custom agent delete flow via UI", async ({ page, request }) => {
+    // Seed via API
+    const created = await request.post("http://localhost:3333/api/agents", {
+      data: {
+        name: "Delete Me",
+        emoji: "🗑",
+        accent: "#ff77aa",
+        description: "Scratch agent for the delete test",
+        systemPrompt: "Say nothing.",
+        allowedTools: [],
+        model: "claude-sonnet-4-6",
+      },
+    });
+    const agent = await created.json();
+
+    await page.goto("/");
+    const card = page.locator(".agent-item", { hasText: "Delete Me" });
+    await expect(card).toBeVisible({ timeout: 5_000 });
+    await card.locator(".agent-action-btn").click();
+    await expect(page.locator("#agent-modal")).toBeVisible({ timeout: 5_000 });
+
+    // Confirm dialog auto-accept
+    page.on("dialog", (d) => d.accept());
+    await page.locator("#agent-delete").click();
+    await expect(page.locator("#agent-modal")).toBeHidden({ timeout: 5_000 });
+    await expect(page.locator(".agent-item", { hasText: "Delete Me" })).toHaveCount(0, {
+      timeout: 5_000,
+    });
+
+    // Server-side: agent is gone
+    const list = await (await request.get("http://localhost:3333/api/agents")).json();
+    expect(list.find((a) => a.id === agent.id)).toBeUndefined();
+  });
+
+  test("settings Telegram section renders disabled with 'coming soon' badge", async ({ page }) => {
+    await page.goto("/");
+    await page.locator("#settings-btn").click();
+    await expect(page.locator("#settings-modal")).toBeVisible({ timeout: 5_000 });
+
+    const telegramSection = page.locator(".settings-section", { hasText: /Telegram/i });
+    await expect(telegramSection.locator(".section-badge")).toContainText(/coming soon/i);
+    // Inputs inside Telegram section should be disabled
+    const disabledInputs = telegramSection.locator("input[disabled]");
+    expect(await disabledInputs.count()).toBeGreaterThan(0);
   });
 
   test("custom agent CRUD flow end-to-end", async ({ page, request }) => {

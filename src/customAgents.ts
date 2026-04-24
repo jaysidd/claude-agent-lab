@@ -33,7 +33,8 @@ function rowToConfig(r: any): AgentConfig {
   let tools: string[] = [];
   try {
     tools = JSON.parse(r.allowed_tools || "[]");
-  } catch {
+  } catch (err) {
+    console.warn(`customAgents: failed to parse allowed_tools for ${r.id}:`, err);
     tools = [];
   }
   return {

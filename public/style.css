@@ -660,6 +660,35 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-section .section-badge {
+  font-size: 9px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  letter-spacing: 0.3px;
+}
+.settings-section.disabled {
+  opacity: 0.6;
+}
+.settings-section.disabled input,
+.settings-section.disabled textarea {
+  cursor: not-allowed;
+}
+.settings-section .section-disabled-note {
+  margin: 0 0 10px 0;
+  padding: 8px 10px;
+  background: rgba(251, 191, 36, 0.05);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 .settings-field {
   margin-bottom: 10px;
