@@ -1,12 +1,83 @@
 import { chromium } from "@playwright/test";
+import { mkdir } from "node:fs/promises";
 
-const out = process.argv[2] || "docs/screenshots/command-center.png";
+const OUT_DIR = "docs/screenshots";
+await mkdir(OUT_DIR, { recursive: true });
+
+// Point the server's cwd at this project so screenshots showing file
+// autocomplete surface project files, not the user's private ~/ dirs.
+await fetch("http://localhost:3333/api/cwd", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ path: process.cwd() }),
+});
+
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const ctx = await browser.newContext({
+  viewport: { width: 1440, height: 900 },
+  deviceScaleFactor: 2,
+});
+const page = await ctx.newPage();
+
+async function snap(name, opts = {}) {
+  const path = `${OUT_DIR}/${name}.png`;
+  await page.screenshot({ path, ...opts });
+  console.log("wrote " + path);
+}
+
+async function waitFrame(ms = 200) {
+  await page.waitForTimeout(ms);
+}
+
+// 1. Overview — sidebar + empty state, default (Main agent selected)
 await page.goto("http://localhost:3333/");
 await page.waitForSelector(".agent-item");
-// Give the default Main agent its empty state
-await page.waitForTimeout(300);
-await page.screenshot({ path: out, fullPage: false });
+await waitFrame(300);
+await snap("01-overview");
+
+// 2. Folder picker modal (no SDK, static)
+await page.locator("#cwd-pill").click();
+await page.waitForSelector("#cwd-modal:not(.hidden)");
+await page.locator("button[data-path='~/Desktop']").click();
+await waitFrame(400);
+await snap("02-folder-picker");
+await page.locator("#cwd-cancel").click();
+
+// 3. Task board — open, empty
+await page.locator("#tasks-btn").click();
+await page.waitForSelector("#tasks-modal:not(.hidden)");
+await waitFrame(300);
+await snap("03-task-board-empty");
+
+// 4. Task board — with a typed task in the form (visual cue for auto-routing)
+await page
+  .locator("#task-description")
+  .fill("Draft a short email thanking a client for their feedback this week");
+await waitFrame(200);
+await snap("04-task-board-form");
+await page.locator("#tasks-close").click();
+
+// 5. Content agent highlighted — model chip shows Opus
+await page.locator(".agent-item", { hasText: "Content" }).click();
+await waitFrame(300);
+await snap("05-content-agent-opus");
+
+// 6. Model selector opened (via keyboard)
+await page.locator("#model-select").click();
+await waitFrame(200);
+await snap("06-model-selector");
+// close by clicking elsewhere
+await page.locator("#chat-title").click();
+
+// 7. @file autocomplete popover in composer
+await page.locator(".agent-item", { hasText: "Ops" }).click();
+await page.locator("#input").click();
+await page
+  .locator("#input")
+  .pressSequentially("Read @", { delay: 30 });
+await page.waitForSelector("#file-popover:not(.hidden)");
+await waitFrame(300);
+await snap("07-file-autocomplete");
+
 await browser.close();
-console.log("wrote " + out);
+console.log("done");
