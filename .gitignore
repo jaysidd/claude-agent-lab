@@ -1,1 +1,30 @@
+# Dependencies
 node_modules/
+
+# Environment (never commit real keys)
+.env
+.env.local
+.env.*.local
+
+# Test artifacts
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Build / dist
+dist/
+
+# Local Claude Code state if it ever lands inside this project dir
+.claude/
+.claude.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Logs
+*.log

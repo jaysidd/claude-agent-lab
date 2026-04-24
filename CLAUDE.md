@@ -158,7 +158,7 @@ After any change to `src/server.ts` or `src/agents.ts`, restart automatically:
 
 ```bash
 lsof -ti:3333 | xargs kill -9 2>/dev/null
-cd "/Users/junaidsiddiqi/Desktop/claude-agent-lab" && npm run serve &
+cd "~/Desktop/claude-agent-lab" && npm run serve &
 ```
 
 Frontend changes (`public/*.html|css|js`) need only a browser reload — no server restart.
@@ -170,7 +170,7 @@ Tell the user: "Restarted the server — reload the browser to pick up changes."
 ## Launching the App
 
 ```bash
-cd "/Users/junaidsiddiqi/Desktop/claude-agent-lab"
+cd "~/Desktop/claude-agent-lab"
 npm install          # if node_modules missing
 npm run serve        # starts Express on :3333
 open http://localhost:3333/
