@@ -3,8 +3,24 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs/promises";
 import os from "node:os";
+import { randomUUID } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { AGENTS, AGENT_LIST, MODELS, subAgentsFor } from "./agents.js";
+
+type TaskPriority = "low" | "medium" | "high";
+type TaskStatus = "queued" | "active" | "done" | "error";
+type Task = {
+  id: string;
+  description: string;
+  priority: TaskPriority;
+  assignedAgent: string;
+  status: TaskStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  result?: string;
+  error?: string;
+};
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
@@ -15,7 +31,49 @@ app.use(express.static(PUBLIC_DIR));
 
 const sessionByAgent = new Map<string, string>();
 const modelOverride = new Map<string, string>();
+const tasks = new Map<string, Task>();
 let currentCwd = os.homedir();
+
+async function classifyTask(description: string): Promise<string> {
+  const systemPrompt = `You classify user tasks to exactly one of these specialists:
+- main — general questions, planning, chat, cross-specialist triage
+- comms — emails, messages, outreach, customer replies, social posts
+- content — YouTube scripts, blog posts, titles, hooks, creative writing, thumbnails
+- ops — reading local files, summarizing a project folder, file search
+
+Respond with exactly ONE word: main, comms, content, or ops. No punctuation, no explanation.`;
+
+  let chosen = "main";
+  try {
+    for await (const msg of query({
+      prompt: `Task: ${description}`,
+      options: {
+        systemPrompt,
+        model: "claude-haiku-4-5",
+        allowedTools: [],
+      },
+    })) {
+      const anyMsg = msg as any;
+      if ("result" in anyMsg && typeof anyMsg.result === "string") {
+        const raw = anyMsg.result.trim().toLowerCase();
+        const compact = raw.replace(/[^a-z]/g, "");
+        if (AGENTS[compact]) {
+          chosen = compact;
+        } else {
+          for (const id of Object.keys(AGENTS)) {
+            if (raw.includes(id)) {
+              chosen = id;
+              break;
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("classifier error:", err);
+  }
+  return chosen;
+}
 
 function expandPath(p: string): string {
   if (p.startsWith("~")) return path.join(os.homedir(), p.slice(1));
@@ -261,6 +319,86 @@ app.post("/api/chat/stream", async (req, res) => {
 
 app.post("/api/reset/:agentId", (req, res) => {
   sessionByAgent.delete(req.params.agentId);
+  res.json({ ok: true });
+});
+
+app.get("/api/tasks", (_req, res) => {
+  res.json(Array.from(tasks.values()).sort((a, b) => b.createdAt - a.createdAt));
+});
+
+app.post("/api/task", async (req, res) => {
+  const description = (req.body?.description ?? "").toString().trim();
+  const priority = (req.body?.priority ?? "medium") as TaskPriority;
+  const agentOverride = req.body?.agentId as string | undefined;
+  if (!description) return res.status(400).json({ error: "description required" });
+  if (!["low", "medium", "high"].includes(priority)) {
+    return res.status(400).json({ error: "invalid priority" });
+  }
+
+  const assignedAgent =
+    agentOverride && AGENTS[agentOverride] ? agentOverride : await classifyTask(description);
+
+  const task: Task = {
+    id: randomUUID(),
+    description,
+    priority,
+    assignedAgent,
+    status: "queued",
+    createdAt: Date.now(),
+  };
+  tasks.set(task.id, task);
+  res.json(task);
+});
+
+app.post("/api/task/:id/run", async (req, res) => {
+  const task = tasks.get(req.params.id);
+  if (!task) return res.status(404).json({ error: "task not found" });
+  if (task.status !== "queued") {
+    return res.status(400).json({ error: "task already " + task.status });
+  }
+
+  const agent = AGENTS[task.assignedAgent];
+  if (!agent) {
+    task.status = "error";
+    task.error = "assigned agent no longer exists";
+    return res.json(task);
+  }
+
+  task.status = "active";
+  task.startedAt = Date.now();
+
+  let finalText = "";
+  const subAgents = subAgentsFor(agent.id);
+  try {
+    for await (const msg of query({
+      prompt: task.description,
+      options: {
+        allowedTools: agent.allowedTools,
+        systemPrompt: agent.systemPrompt,
+        cwd: currentCwd,
+        model: effectiveModel(agent.id),
+        ...(subAgents ? { agents: subAgents } : {}),
+      },
+    })) {
+      const anyMsg = msg as any;
+      if ("result" in anyMsg && typeof anyMsg.result === "string") {
+        finalText = anyMsg.result;
+      }
+    }
+    task.status = "done";
+    task.completedAt = Date.now();
+    task.result = finalText;
+  } catch (err: any) {
+    task.status = "error";
+    task.error = err?.message ?? "agent failed";
+    task.completedAt = Date.now();
+  }
+
+  res.json(task);
+});
+
+app.delete("/api/task/:id", (req, res) => {
+  tasks.delete(req.params.id);
   res.json({ ok: true });
 });
 

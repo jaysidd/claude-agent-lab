@@ -34,6 +34,9 @@
           </button>
         </div>
         <div class="header-controls">
+          <button id="tasks-btn" type="button" title="Open task board">
+            📋 Tasks <span id="tasks-count" class="tasks-count">0</span>
+          </button>
           <select id="model-select" title="Model for this agent"></select>
           <button id="reset-btn" title="Start a new conversation with this agent">New chat</button>
         </div>
@@ -80,6 +83,50 @@
           <button id="cwd-cancel" type="button" class="btn-ghost">Cancel</button>
           <button id="cwd-save" type="button" class="btn-primary">Use this folder</button>
         </footer>
+      </div>
+    </div>
+
+    <div id="tasks-modal" class="modal-overlay hidden">
+      <div class="modal modal-wide">
+        <header class="modal-header">
+          <div class="modal-title">📋 Task Board</div>
+          <button id="tasks-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <div class="task-create">
+            <textarea
+              id="task-description"
+              rows="2"
+              placeholder="Describe a task — the router will auto-assign the right agent"
+            ></textarea>
+            <div class="task-create-row">
+              <select id="task-priority">
+                <option value="low">Low</option>
+                <option value="medium" selected>Medium</option>
+                <option value="high">High</option>
+              </select>
+              <select id="task-agent">
+                <option value="">🧠 Auto-route (Haiku)</option>
+              </select>
+              <button id="task-create-btn" class="btn-primary" type="button">Create</button>
+            </div>
+          </div>
+
+          <div class="task-board">
+            <div class="task-col">
+              <h3>Queued <span class="col-count" id="col-queued">0</span></h3>
+              <div class="task-list" id="col-queued-list"></div>
+            </div>
+            <div class="task-col">
+              <h3>Active <span class="col-count" id="col-active">0</span></h3>
+              <div class="task-list" id="col-active-list"></div>
+            </div>
+            <div class="task-col">
+              <h3>Done <span class="col-count" id="col-done">0</span></h3>
+              <div class="task-list" id="col-done-list"></div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

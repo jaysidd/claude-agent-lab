@@ -483,8 +483,216 @@ function insertSelectedFile() {
 
 input.addEventListener("blur", () => setTimeout(hideFilePopover, 100));
 
+// ----- Task board -----
+
+const tasksBtn = document.getElementById("tasks-btn");
+const tasksCount = document.getElementById("tasks-count");
+const tasksModal = document.getElementById("tasks-modal");
+const tasksCloseBtn = document.getElementById("tasks-close");
+const taskDescription = document.getElementById("task-description");
+const taskPriority = document.getElementById("task-priority");
+const taskAgentSelect = document.getElementById("task-agent");
+const taskCreateBtn = document.getElementById("task-create-btn");
+
+state.tasks = [];
+
+tasksBtn.addEventListener("click", openTasksModal);
+tasksCloseBtn.addEventListener("click", () => tasksModal.classList.add("hidden"));
+tasksModal.addEventListener("click", (e) => {
+  if (e.target === tasksModal) tasksModal.classList.add("hidden");
+});
+
+async function openTasksModal() {
+  populateTaskAgentSelect();
+  await refreshTasks();
+  tasksModal.classList.remove("hidden");
+  taskDescription.focus();
+}
+
+function populateTaskAgentSelect() {
+  if (taskAgentSelect.options.length > 1) return;
+  for (const a of state.agents) {
+    const opt = document.createElement("option");
+    opt.value = a.id;
+    opt.textContent = `${a.emoji} ${a.name}`;
+    taskAgentSelect.appendChild(opt);
+  }
+}
+
+taskCreateBtn.addEventListener("click", createTask);
+taskDescription.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    e.preventDefault();
+    createTask();
+  }
+});
+
+async function createTask() {
+  const description = taskDescription.value.trim();
+  if (!description) return;
+  taskCreateBtn.disabled = true;
+  taskCreateBtn.textContent = "Routing…";
+  try {
+    const body = { description, priority: taskPriority.value };
+    if (taskAgentSelect.value) body.agentId = taskAgentSelect.value;
+    const res = await fetch("/api/task", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    taskDescription.value = "";
+    await refreshTasks();
+  } catch (err) {
+    alert("Could not create task: " + err.message);
+  } finally {
+    taskCreateBtn.disabled = false;
+    taskCreateBtn.textContent = "Create";
+  }
+}
+
+async function refreshTasks() {
+  try {
+    const res = await fetch("/api/tasks");
+    state.tasks = await res.json();
+    renderTasks();
+  } catch {
+    /* no-op */
+  }
+}
+
+function renderTasks() {
+  const byStatus = { queued: [], active: [], done: [], error: [] };
+  for (const t of state.tasks) (byStatus[t.status] ?? byStatus.queued).push(t);
+
+  document.getElementById("col-queued").textContent = byStatus.queued.length;
+  document.getElementById("col-active").textContent = byStatus.active.length;
+  const doneCount = byStatus.done.length + byStatus.error.length;
+  document.getElementById("col-done").textContent = doneCount;
+
+  renderColumn("col-queued-list", byStatus.queued);
+  renderColumn("col-active-list", byStatus.active);
+  renderColumn("col-done-list", [...byStatus.done, ...byStatus.error]);
+
+  // Update header count + pulse on active
+  const active = byStatus.active.length;
+  const queued = byStatus.queued.length;
+  tasksCount.textContent = queued + active;
+  tasksCount.classList.toggle("has-active", active > 0);
+}
+
+function renderColumn(id, items) {
+  const el = document.getElementById(id);
+  el.innerHTML = "";
+  if (items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "col-empty";
+    empty.textContent =
+      id === "col-queued-list"
+        ? "Add a task above"
+        : id === "col-active-list"
+          ? "Nothing running"
+          : "No completed tasks yet";
+    el.appendChild(empty);
+    return;
+  }
+  for (const t of items) el.appendChild(renderTaskCard(t));
+}
+
+function renderTaskCard(task) {
+  const agent = state.agents.find((a) => a.id === task.assignedAgent);
+  const card = document.createElement("div");
+  card.className = `task-card status-${task.status}`;
+
+  const head = document.createElement("div");
+  head.className = "task-card-head";
+  const agentInfo = document.createElement("span");
+  agentInfo.className = "task-card-agent";
+  agentInfo.textContent = agent ? `${agent.emoji} ${agent.name}` : task.assignedAgent;
+  const prio = document.createElement("span");
+  prio.className = `task-card-priority ${task.priority}`;
+  prio.textContent = task.priority;
+  head.appendChild(agentInfo);
+  head.appendChild(prio);
+  card.appendChild(head);
+
+  const desc = document.createElement("div");
+  desc.className = "task-card-desc";
+  desc.textContent = task.description;
+  card.appendChild(desc);
+
+  if (task.status === "done" && task.result) {
+    const result = document.createElement("div");
+    result.className = "task-card-result";
+    result.textContent = task.result;
+    card.appendChild(result);
+  }
+  if (task.status === "error" && task.error) {
+    const err = document.createElement("div");
+    err.className = "task-card-error";
+    err.textContent = "⚠️ " + task.error;
+    card.appendChild(err);
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "task-card-actions";
+
+  if (task.status === "queued") {
+    const runBtn = document.createElement("button");
+    runBtn.className = "run-btn";
+    runBtn.textContent = "Run";
+    runBtn.addEventListener("click", () => runTask(task.id));
+    actions.appendChild(runBtn);
+  }
+
+  if (task.status !== "active") {
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", () => deleteTask(task.id));
+    actions.appendChild(delBtn);
+  }
+
+  if (actions.children.length) card.appendChild(actions);
+
+  return card;
+}
+
+async function runTask(id) {
+  // Optimistic UI: mark as active immediately
+  const local = state.tasks.find((t) => t.id === id);
+  if (local) local.status = "active";
+  renderTasks();
+
+  try {
+    const res = await fetch(`/api/task/${id}/run`, { method: "POST" });
+    const updated = await res.json();
+    if (!res.ok) throw new Error(updated.error);
+    const idx = state.tasks.findIndex((t) => t.id === id);
+    if (idx >= 0) state.tasks[idx] = updated;
+    renderTasks();
+  } catch (err) {
+    if (local) {
+      local.status = "error";
+      local.error = err.message;
+    }
+    renderTasks();
+  }
+}
+
+async function deleteTask(id) {
+  try {
+    await fetch(`/api/task/${id}`, { method: "DELETE" });
+    state.tasks = state.tasks.filter((t) => t.id !== id);
+    renderTasks();
+  } catch {
+    /* no-op */
+  }
+}
+
 (async () => {
   await loadModels();
   await loadCwd();
   await loadAgents();
+  await refreshTasks();
 })();
