@@ -27,7 +27,13 @@ data/
 
 # OS
 .DS_Store
+**/.DS_Store
 Thumbs.db
+
+# Private notes / drafts — never pushed to the public repo
+.notes/
+handoff.md
+docs/drafts/
 
 # Editor
 .vscode/

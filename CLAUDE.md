@@ -103,7 +103,7 @@ Every user-visible feature gets at least one Playwright test.
 - When in doubt, ask.
 
 ### End-of-session pattern
-When wrapping a session, spawn Performance Analyst and Security Analyst as background agents (`run_in_background: true`). Their reports land in `handoff.md` for the next session.
+When wrapping a session, spawn Performance Analyst and Security Analyst as background agents (`run_in_background: true`). Their reports land in `docs/audits/` (public) for reference, and in `.notes/handoff.md` (private) for next-session triage.
 
 ---
 
@@ -138,11 +138,17 @@ When wrapping a session, spawn Performance Analyst and Security Analyst as backg
 
 After any major change, update before the session ends:
 
-1. **`handoff.md`** — current state, what changed this session, what's next
+1. **`.notes/handoff.md`** *(private, gitignored)* — current state, what changed this session, what's next
 2. **`backlog.md`** — move completed items to Done, add new items discovered during work
 3. **`architecture.md`** — new design decisions, updated file map
-4. **`docs/case-studies/`** *(when useful)* — case studies for patterns discovered, iteration loops, decisions worth documenting
-5. **`docs/drafts/`** *(when useful)* — LinkedIn draft per session. Style: measured optimism, personal reflection, ends with a question.
+4. **`docs/case-studies/`** *(public, when useful)* — case studies for patterns discovered, iteration loops, decisions worth documenting
+5. **`.notes/drafts/`** *(private, gitignored, when useful)* — LinkedIn / blog drafts per session. Style: measured optimism, personal reflection, ends with a question.
+
+### What's private vs public
+The `.notes/` directory is gitignored. Anything in there stays on your disk
+and never lands on the public GitHub repo — use it for session handoffs,
+draft posts, and internal thinking. Everything else (docs/, backlog.md,
+architecture.md, CLAUDE.md, README.md, source, tests, screenshots) is public.
 
 ### What counts as a "major change"
 - New API route or user-facing surface
@@ -202,7 +208,9 @@ claude-agent-lab/
 ├── CLAUDE.md            # This file
 ├── architecture.md      # Technical architecture
 ├── backlog.md           # Sequential backlog (C##)
-├── handoff.md           # Session-to-session continuity
+├── .notes/              # Private, gitignored — handoff + drafts
+│   ├── handoff.md       # Session-to-session continuity (private)
+│   └── drafts/          # LinkedIn / blog drafts (private)
 ├── package.json
 ├── tsconfig.json
 └── .gitignore
@@ -217,7 +225,7 @@ claude-agent-lab/
 | `CLAUDE.md` | This file — project rules and quick reference |
 | `backlog.md` | Feature backlog prioritized by importance (C##) |
 | `architecture.md` | Technical architecture and design decisions |
-| `handoff.md` | Session handoff notes for continuity |
+| `.notes/handoff.md` | Session handoff notes for continuity (private, gitignored) |
 
 ---
 

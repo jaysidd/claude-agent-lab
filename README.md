@@ -576,14 +576,13 @@ claude-agent-lab/
 ├── docs/
 │   ├── case-studies/    # What-we-learned-while-building notes
 │   ├── audits/          # Performance + Security audit reports
-│   ├── drafts/          # LinkedIn drafts (personal blog pipeline)
 │   └── screenshots/     # The images used in this README
 ├── scripts/
 │   └── screenshot.mjs   # Playwright script that captures the README images
 ├── CLAUDE.md            # Project conventions (six-role dev team, etc.)
 ├── architecture.md      # Technical architecture
 ├── backlog.md           # Sequential feature backlog (C##)
-└── handoff.md           # Session-to-session notes
+└── (.notes/             # Private, gitignored — handoffs & draft posts)
 ```
 
 ---
