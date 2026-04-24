@@ -248,6 +248,19 @@ npm run serve
 
 Then open [http://localhost:3333](http://localhost:3333). The server binds to `127.0.0.1` only — it does **not** listen on your LAN.
 
+### One-click launcher (macOS)
+
+The repo ships a `.command` file that, when double-clicked, kills any previous server on :3333, runs `npm install` if needed, starts the server, waits for readiness, and opens the browser. Copy it to your Desktop for a double-clickable launcher:
+
+```bash
+cp scripts/launch-command-center.command "$HOME/Desktop/Command Center.command"
+chmod +x "$HOME/Desktop/Command Center.command"
+```
+
+First double-click: macOS Gatekeeper may block an unsigned script. Right-click the icon → **Open** → confirm once; after that it launches without prompts. The script respects a `COMMAND_CENTER_DIR` env var if your clone lives somewhere other than `~/Desktop/claude-agent-lab`.
+
+Want a custom icon? Right-click the file on Desktop → **Get Info** → drag a PNG onto the tiny icon in the top-left of the Info window.
+
 ### Requirements
 - **Node.js 20+** (tested on 24.14.1)
 - **One** of:
