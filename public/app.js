@@ -76,7 +76,11 @@ async function loadAgents() {
   const res = await fetch("/api/agents");
   state.agents = await res.json();
   renderAgents();
-  if (state.agents[0]) selectAgent(state.agents[0].id);
+  if (state.activeAgentId && state.agents.some((a) => a.id === state.activeAgentId)) {
+    selectAgent(state.activeAgentId);
+  } else if (state.agents[0]) {
+    selectAgent(state.agents[0].id);
+  }
 }
 
 async function loadCwd() {
@@ -91,7 +95,10 @@ function renderAgents() {
   agentListEl.innerHTML = "";
   for (const agent of state.agents) {
     const el = document.createElement("div");
-    el.className = "agent-item" + (agent.id === state.activeAgentId ? " active" : "");
+    el.className =
+      "agent-item" +
+      (agent.id === state.activeAgentId ? " active" : "") +
+      (agent.builtIn ? "" : " custom");
     el.dataset.id = agent.id;
 
     const avatar = document.createElement("div");
@@ -102,9 +109,29 @@ function renderAgents() {
     const meta = document.createElement("div");
     meta.className = "agent-meta";
 
+    const nameRow = document.createElement("div");
+    nameRow.style.display = "flex";
+    nameRow.style.justifyContent = "space-between";
+    nameRow.style.alignItems = "center";
     const nameEl = document.createElement("div");
     nameEl.className = "agent-name";
     nameEl.textContent = agent.name;
+    nameRow.appendChild(nameEl);
+
+    if (!agent.builtIn) {
+      const actions = document.createElement("div");
+      actions.className = "agent-actions";
+      const editBtn = document.createElement("button");
+      editBtn.className = "agent-action-btn";
+      editBtn.title = "Edit this agent";
+      editBtn.textContent = "✎";
+      editBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openAgentEditor(agent.id);
+      });
+      actions.appendChild(editBtn);
+      nameRow.appendChild(actions);
+    }
 
     const descEl = document.createElement("div");
     descEl.className = "agent-desc";
@@ -114,7 +141,7 @@ function renderAgents() {
     chipEl.className = "agent-model-chip";
     chipEl.textContent = prettyModel(agent.model);
 
-    meta.append(nameEl, descEl, chipEl);
+    meta.append(nameRow, descEl, chipEl);
     el.append(avatar, meta);
 
     el.addEventListener("click", () => selectAgent(agent.id));
@@ -1097,6 +1124,362 @@ function reflectPlanMode() {
   const on = !!state.planMode[state.activeAgentId];
   planCheckbox.checked = on;
   planToggle.classList.toggle("active", on);
+}
+
+// ----- Agent editor (create + edit custom agents) -----
+
+const agentModal = document.getElementById("agent-modal");
+const agentModalTitle = document.getElementById("agent-modal-title");
+const agentEmojiInput = document.getElementById("agent-emoji");
+const agentNameInput = document.getElementById("agent-name");
+const agentAccentInput = document.getElementById("agent-accent");
+const agentDescInput = document.getElementById("agent-description");
+const agentModelSelect = document.getElementById("agent-model");
+const agentToolsGrid = document.getElementById("agent-tools");
+const agentRouterCheckbox = document.getElementById("agent-router");
+const agentSystemPromptInput = document.getElementById("agent-system-prompt");
+const agentSaveBtn = document.getElementById("agent-save");
+const agentCancelBtn = document.getElementById("agent-cancel");
+const agentCloseBtn = document.getElementById("agent-close");
+const agentDeleteBtn = document.getElementById("agent-delete");
+const newAgentBtn = document.getElementById("new-agent-btn");
+
+const AVAILABLE_TOOLS = [
+  "Read",
+  "Write",
+  "Edit",
+  "Bash",
+  "Glob",
+  "Grep",
+  "WebFetch",
+  "WebSearch",
+  "Agent",
+  "NotebookEdit",
+  "AskUserQuestion",
+  "Monitor",
+];
+
+let editingAgentId = null;
+
+function renderToolCheckboxes(selected = []) {
+  agentToolsGrid.innerHTML = "";
+  const sel = new Set(selected);
+  for (const tool of AVAILABLE_TOOLS) {
+    const lbl = document.createElement("label");
+    lbl.className = "agent-tool-check";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.dataset.tool = tool;
+    cb.checked = sel.has(tool);
+    lbl.appendChild(cb);
+    const span = document.createElement("span");
+    span.textContent = tool;
+    lbl.appendChild(span);
+    agentToolsGrid.appendChild(lbl);
+  }
+}
+
+function populateAgentModelSelect(current) {
+  agentModelSelect.innerHTML = "";
+  for (const m of state.models) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.label;
+    if (current && current.startsWith(m.id)) opt.selected = true;
+    agentModelSelect.appendChild(opt);
+  }
+}
+
+function clearAgentForm() {
+  editingAgentId = null;
+  agentEmojiInput.value = "🤖";
+  agentNameInput.value = "";
+  agentAccentInput.value = "#8b9eff";
+  agentDescInput.value = "";
+  agentSystemPromptInput.value = "";
+  agentRouterCheckbox.checked = false;
+  populateAgentModelSelect("claude-sonnet-4-6");
+  renderToolCheckboxes([]);
+  agentDeleteBtn.classList.add("hidden");
+  agentModalTitle.textContent = "New agent";
+}
+
+function openAgentEditor(id) {
+  if (!id) {
+    clearAgentForm();
+    agentModal.classList.remove("hidden");
+    agentNameInput.focus();
+    return;
+  }
+  const agent = state.agents.find((a) => a.id === id);
+  if (!agent) return;
+  editingAgentId = id;
+  agentEmojiInput.value = agent.emoji || "🤖";
+  agentNameInput.value = agent.name || "";
+  agentAccentInput.value = agent.accent || "#8b9eff";
+  agentDescInput.value = agent.description || "";
+  populateAgentModelSelect(agent.model);
+  renderToolCheckboxes(agent.allowedTools || []);
+  agentRouterCheckbox.checked = !!agent.isRouter;
+  agentModalTitle.textContent = `Edit agent — ${agent.name}`;
+  agentDeleteBtn.classList.remove("hidden");
+  // Fetch the full record (including system prompt, which /api/agents list omits)
+  fetch(`/api/agents/${id}`)
+    .then((r) => r.json())
+    .then((full) => {
+      agentSystemPromptInput.value = full.systemPrompt || "";
+    });
+  agentModal.classList.remove("hidden");
+}
+
+newAgentBtn.addEventListener("click", () => openAgentEditor(null));
+agentCloseBtn.addEventListener("click", () => agentModal.classList.add("hidden"));
+agentCancelBtn.addEventListener("click", () => agentModal.classList.add("hidden"));
+agentModal.addEventListener("click", (e) => {
+  if (e.target === agentModal) agentModal.classList.add("hidden");
+});
+
+agentSaveBtn.addEventListener("click", async () => {
+  const name = agentNameInput.value.trim();
+  const systemPrompt = agentSystemPromptInput.value.trim();
+  if (!name) return alert("Name required");
+  if (!systemPrompt) return alert("System prompt required");
+  const body = {
+    name,
+    emoji: agentEmojiInput.value.trim() || "🤖",
+    accent: agentAccentInput.value,
+    description: agentDescInput.value.trim(),
+    systemPrompt,
+    allowedTools: Array.from(agentToolsGrid.querySelectorAll("input:checked")).map(
+      (el) => el.dataset.tool,
+    ),
+    model: agentModelSelect.value,
+    isRouter: agentRouterCheckbox.checked,
+  };
+  agentSaveBtn.disabled = true;
+  agentSaveBtn.textContent = "Saving…";
+  try {
+    let res;
+    if (editingAgentId) {
+      res = await fetch(`/api/agents/${editingAgentId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } else {
+      res = await fetch("/api/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    await loadAgents();
+    selectAgent(data.id);
+    agentModal.classList.add("hidden");
+  } catch (err) {
+    alert("Could not save agent: " + err.message);
+  } finally {
+    agentSaveBtn.disabled = false;
+    agentSaveBtn.textContent = "Save";
+  }
+});
+
+agentDeleteBtn.addEventListener("click", async () => {
+  if (!editingAgentId) return;
+  if (!confirm(`Delete agent "${agentNameInput.value}"? This is permanent.`)) return;
+  try {
+    const res = await fetch(`/api/agents/${editingAgentId}`, { method: "DELETE" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    if (state.activeAgentId === editingAgentId) state.activeAgentId = null;
+    await loadAgents();
+    agentModal.classList.add("hidden");
+  } catch (err) {
+    alert("Could not delete agent: " + err.message);
+  }
+});
+
+// ----- Settings -----
+
+const settingsBtn = document.getElementById("settings-btn");
+const settingsModal = document.getElementById("settings-modal");
+const settingsSectionsEl = document.getElementById("settings-sections");
+const settingsCloseBtn = document.getElementById("settings-close");
+const settingsCancelBtn = document.getElementById("settings-cancel");
+const settingsSaveBtn = document.getElementById("settings-save");
+
+let settingsState = { schema: [], values: [], envFallbacks: [] };
+
+settingsBtn.addEventListener("click", openSettingsModal);
+settingsCloseBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
+settingsCancelBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
+settingsModal.addEventListener("click", (e) => {
+  if (e.target === settingsModal) settingsModal.classList.add("hidden");
+});
+settingsSaveBtn.addEventListener("click", saveSettings);
+
+async function openSettingsModal() {
+  await loadSettings();
+  renderSettings();
+  settingsModal.classList.remove("hidden");
+}
+
+async function loadSettings() {
+  try {
+    const res = await fetch("/api/settings");
+    settingsState = await res.json();
+  } catch (err) {
+    alert("Could not load settings: " + err.message);
+  }
+}
+
+function renderSettings() {
+  settingsSectionsEl.innerHTML = "";
+  const valueByKey = {};
+  for (const v of settingsState.values) valueByKey[v.key] = v;
+  const envByKey = {};
+  for (const e of settingsState.envFallbacks) envByKey[e.key] = e;
+
+  for (const section of settingsState.schema) {
+    const secEl = document.createElement("div");
+    secEl.className = "settings-section";
+    const h = document.createElement("h3");
+    h.textContent = section.section;
+    secEl.appendChild(h);
+
+    for (const field of section.fields) {
+      const fieldEl = document.createElement("div");
+      fieldEl.className = "settings-field";
+
+      const current = valueByKey[field.key];
+      const envSet = envByKey[field.key];
+
+      const lbl = document.createElement("label");
+      lbl.textContent = field.label;
+      const meta = document.createElement("span");
+      meta.className = "field-meta";
+      if (current?.hasValue) {
+        meta.textContent = "saved in db";
+      } else if (envSet?.set) {
+        meta.className = "field-meta env-fallback";
+        meta.textContent = "from " + envSet.envKey;
+      } else {
+        meta.textContent = "unset";
+      }
+      lbl.appendChild(meta);
+      fieldEl.appendChild(lbl);
+
+      const isTextarea = field.type === "textarea";
+      const inp = document.createElement(isTextarea ? "textarea" : "input");
+      if (!isTextarea) inp.type = field.isSecret ? "password" : "text";
+      inp.dataset.key = field.key;
+      inp.dataset.secret = field.isSecret ? "1" : "0";
+      inp.placeholder = field.placeholder ?? "";
+      if (!field.isSecret && current?.hasValue) {
+        inp.value = current.preview || "";
+      }
+      fieldEl.appendChild(inp);
+
+      if (field.isSecret && current?.hasValue) {
+        const preview = document.createElement("div");
+        preview.className = "field-preview";
+        preview.textContent = `current: ${current.preview}  (leave blank to keep)`;
+        fieldEl.appendChild(preview);
+      }
+
+      if (field.help) {
+        const help = document.createElement("div");
+        help.className = "field-help";
+        help.textContent = field.help;
+        fieldEl.appendChild(help);
+      }
+
+      secEl.appendChild(fieldEl);
+    }
+
+    // Per-section Test Connection button
+    if (section.section.startsWith("WhisprDesk")) {
+      const testBtn = document.createElement("button");
+      testBtn.className = "btn-test";
+      testBtn.type = "button";
+      testBtn.textContent = "Test connection";
+      testBtn.addEventListener("click", () => testWhisprDesk(secEl));
+      secEl.appendChild(testBtn);
+      const result = document.createElement("div");
+      result.dataset.role = "test-result";
+      secEl.appendChild(result);
+    }
+
+    settingsSectionsEl.appendChild(secEl);
+  }
+}
+
+async function saveSettings() {
+  const entries = [];
+  for (const inp of settingsSectionsEl.querySelectorAll("[data-key]")) {
+    const key = inp.dataset.key;
+    const isSecret = inp.dataset.secret === "1";
+    const value = inp.value;
+    if (isSecret) {
+      // Only send if user typed something new
+      if (value.trim()) entries.push({ key, value: value.trim(), isSecret: true });
+    } else {
+      // Non-secret fields always sent (even empty = reset to env fallback)
+      const prev = settingsState.values.find((v) => v.key === key);
+      if (value.trim()) {
+        entries.push({ key, value: value.trim(), isSecret: false });
+      } else if (prev?.hasValue) {
+        entries.push({ key, value: null }); // clear
+      }
+    }
+  }
+  settingsSaveBtn.disabled = true;
+  settingsSaveBtn.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    await loadSettings();
+    renderSettings();
+    // Re-probe WhisprDesk after save, since token may now be set
+    await refreshWhisprDeskStatus();
+  } catch (err) {
+    alert("Could not save settings: " + err.message);
+  } finally {
+    settingsSaveBtn.disabled = false;
+    settingsSaveBtn.textContent = "Save changes";
+  }
+}
+
+async function testWhisprDesk(secEl) {
+  const result = secEl.querySelector("[data-role='test-result']");
+  result.className = "settings-test-result";
+  result.textContent = "Testing…";
+  try {
+    const res = await fetch("/api/whisprdesk/status");
+    const data = await res.json();
+    if (!data.configured) {
+      result.classList.add("err");
+      result.textContent = "Not configured — save a token first.";
+      return;
+    }
+    if (data.reachable) {
+      result.classList.add("ok");
+      result.textContent = "✓ Reachable. " + JSON.stringify(data.upstream ?? {});
+    } else {
+      result.classList.add("err");
+      result.textContent = "Configured but unreachable: " + (data.error ?? "unknown");
+    }
+  } catch (err) {
+    result.classList.add("err");
+    result.textContent = "Test failed: " + err.message;
+  }
 }
 
 // ----- WhisprDesk voice integration -----

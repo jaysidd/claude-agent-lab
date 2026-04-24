@@ -20,6 +20,9 @@
         </div>
       </header>
       <nav id="agent-list"></nav>
+      <div class="sidebar-add-row">
+        <button id="new-agent-btn" type="button" title="Create a custom agent">+ New agent</button>
+      </div>
       <footer class="sidebar-footer">
         <div class="footer-row">
           <span class="status-dot"></span>
@@ -42,6 +45,9 @@
           </button>
         </div>
         <div class="header-controls">
+          <button id="settings-btn" type="button" title="Open settings">
+            ⚙️ Settings
+          </button>
           <button id="memory-btn" type="button" title="Open persistent memory">
             🧠 Memory <span id="memory-count" class="tasks-count">0</span>
           </button>
@@ -98,6 +104,82 @@
         <footer class="modal-footer">
           <button id="cwd-cancel" type="button" class="btn-ghost">Cancel</button>
           <button id="cwd-save" type="button" class="btn-primary">Use this folder</button>
+        </footer>
+      </div>
+    </div>
+
+    <div id="agent-modal" class="modal-overlay hidden">
+      <div class="modal modal-wide">
+        <header class="modal-header">
+          <div class="modal-title" id="agent-modal-title">New agent</div>
+          <button id="agent-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <div class="agent-form">
+            <div class="agent-form-row">
+              <div class="agent-form-col agent-emoji-col">
+                <label>Emoji</label>
+                <input id="agent-emoji" type="text" maxlength="4" placeholder="🤖" />
+              </div>
+              <div class="agent-form-col agent-name-col">
+                <label>Name</label>
+                <input id="agent-name" type="text" placeholder="e.g. Research" />
+              </div>
+              <div class="agent-form-col agent-accent-col">
+                <label>Accent</label>
+                <input id="agent-accent" type="color" value="#8b9eff" />
+              </div>
+            </div>
+            <div class="agent-form-row single">
+              <label>One-line description</label>
+              <input id="agent-description" type="text" placeholder="Short blurb shown in the sidebar" />
+            </div>
+            <div class="agent-form-row single">
+              <label>Default model</label>
+              <select id="agent-model"></select>
+            </div>
+            <div class="agent-form-row single">
+              <label>Tools <span class="field-meta">check any the agent may use</span></label>
+              <div id="agent-tools" class="agent-tool-grid"></div>
+            </div>
+            <div class="agent-form-row single">
+              <label class="inline-row">
+                <input id="agent-router" type="checkbox" />
+                <span>Router — this agent can delegate to other agents via the Agent tool</span>
+              </label>
+            </div>
+            <div class="agent-form-row single">
+              <label>System prompt</label>
+              <textarea id="agent-system-prompt" rows="8" placeholder="You are ..."></textarea>
+            </div>
+          </div>
+        </div>
+        <footer class="modal-footer">
+          <button id="agent-delete" type="button" class="btn-ghost btn-danger hidden">Delete</button>
+          <button id="agent-cancel" type="button" class="btn-ghost">Cancel</button>
+          <button id="agent-save" type="button" class="btn-primary">Save</button>
+        </footer>
+      </div>
+    </div>
+
+    <div id="settings-modal" class="modal-overlay hidden">
+      <div class="modal modal-wide">
+        <header class="modal-header">
+          <div class="modal-title">⚙️ Settings</div>
+          <button id="settings-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="modal-intro">
+            Per-integration tokens and URLs. Values saved here override any
+            matching environment variable on the next request. Secrets are never
+            returned to the browser — you see a masked preview, and leaving a
+            secret field blank keeps the existing value.
+          </p>
+          <div id="settings-sections"></div>
+        </div>
+        <footer class="modal-footer">
+          <button id="settings-cancel" type="button" class="btn-ghost">Close</button>
+          <button id="settings-save" type="button" class="btn-primary">Save changes</button>
         </footer>
       </div>
     </div>

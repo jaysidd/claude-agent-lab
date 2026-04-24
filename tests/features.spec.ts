@@ -102,6 +102,71 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     }
   });
 
+  test("settings modal opens and exposes whisprdesk + telegram sections", async ({ page, request }) => {
+    // Reset any saved settings
+    const existing = await request.get("http://localhost:3333/api/settings");
+    const data = await existing.json();
+    for (const v of data.values ?? []) {
+      await request.delete(`http://localhost:3333/api/settings/${v.key}`);
+    }
+
+    await page.goto("/");
+    await page.locator("#settings-btn").click();
+    await expect(page.locator("#settings-modal")).toBeVisible();
+
+    const sectionTitles = await page.locator(".settings-section h3").allTextContents();
+    expect(sectionTitles).toEqual(expect.arrayContaining([expect.stringMatching(/WhisprDesk/i)]));
+    expect(sectionTitles).toEqual(expect.arrayContaining([expect.stringMatching(/Telegram/i)]));
+
+    // Save a non-secret value, confirm it persists via API
+    await page.locator('input[data-key="whisprdesk.url"]').fill("http://127.0.0.1:9999");
+    await page.locator("#settings-save").click();
+    await expect(page.locator("#settings-save")).toHaveText("Save changes");
+
+    const after = await (await request.get("http://localhost:3333/api/settings")).json();
+    const saved = after.values.find((v) => v.key === "whisprdesk.url");
+    expect(saved?.preview).toBe("http://127.0.0.1:9999");
+
+    // Clean up
+    await request.delete("http://localhost:3333/api/settings/whisprdesk.url");
+  });
+
+  test("custom agent CRUD flow end-to-end", async ({ page, request }) => {
+    await page.goto("/");
+    await page.locator("#new-agent-btn").click();
+    await expect(page.locator("#agent-modal")).toBeVisible();
+
+    await page.locator("#agent-name").fill("Playwright Bot");
+    await page.locator("#agent-emoji").fill("🎭");
+    await page.locator("#agent-description").fill("Smoke test agent");
+    await page.locator("#agent-system-prompt").fill("You are Playwright Bot. Only reply 'ok'.");
+    // Check Read tool
+    await page.locator('input[data-tool="Read"]').check();
+    await page.locator("#agent-save").click();
+    await expect(page.locator("#agent-modal")).toBeHidden();
+
+    // It should appear in the sidebar
+    await expect(page.locator(".agent-item", { hasText: "Playwright Bot" })).toBeVisible();
+
+    // Edit it
+    await page
+      .locator(".agent-item", { hasText: "Playwright Bot" })
+      .locator(".agent-action-btn")
+      .click();
+    await expect(page.locator("#agent-modal")).toBeVisible();
+    await page.locator("#agent-description").fill("Updated description");
+    await page.locator("#agent-save").click();
+    await expect(page.locator("#agent-modal")).toBeHidden();
+    await expect(
+      page.locator(".agent-item", { hasText: "Playwright Bot" }).locator(".agent-desc"),
+    ).toContainText("Updated description");
+
+    // Delete via API to keep the test deterministic
+    const list = await (await request.get("http://localhost:3333/api/agents")).json();
+    const bot = list.find((a) => a.name === "Playwright Bot");
+    if (bot) await request.delete(`http://localhost:3333/api/agents/${bot.id}`);
+  });
+
   test("markdown renders in completed agent messages", async ({ page }) => {
     // Use the slash command path — it writes markdown directly to the history
     // without needing the engine. /agents produces bold + list output.

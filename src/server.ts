@@ -6,7 +6,20 @@ import fsSync from "node:fs";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { AGENTS, AGENT_LIST, MODELS, subAgentsFor } from "./agents.js";
+import { AGENTS, MODELS } from "./agents.js";
+import {
+  allAgents,
+  findAgent,
+  isBuiltInAgent,
+  subAgentsFor,
+  builtInIds,
+} from "./agentRegistry.js";
+import {
+  createCustomAgent,
+  updateCustomAgent,
+  deleteCustomAgent,
+  findCustomAgent,
+} from "./customAgents.js";
 
 // Minimal .env loader (no dep). Runs before any env usage below.
 (() => {
@@ -40,6 +53,13 @@ import {
   clearMemories,
   augmentedSystemPrompt,
 } from "./memory.js";
+import {
+  maskedSettings,
+  setSetting,
+  deleteSetting,
+  configValue,
+  SETTINGS_SCHEMA,
+} from "./settings.js";
 
 type TaskPriority = "low" | "medium" | "high";
 type TaskStatus = "queued" | "active" | "done" | "error";
@@ -116,19 +136,21 @@ function expandPath(p: string): string {
 }
 
 function effectiveModel(agentId: string): string {
-  return modelOverride.get(agentId) ?? AGENTS[agentId].model;
+  return modelOverride.get(agentId) ?? findAgent(agentId)?.model ?? "claude-sonnet-4-6";
 }
 
 app.get("/api/agents", (_req, res) => {
   res.json(
-    AGENT_LIST.map(({ id, name, emoji, accent, description }) => ({
+    allAgents().map(({ id, name, emoji, accent, description, model, isRouter }) => ({
       id,
       name,
       emoji,
       accent,
       description,
       model: effectiveModel(id),
-      defaultModel: AGENTS[id].model,
+      defaultModel: model,
+      isRouter: !!isRouter,
+      builtIn: isBuiltInAgent(id),
     })),
   );
 });
@@ -139,7 +161,7 @@ app.get("/api/models", (_req, res) => {
 
 app.post("/api/model/:agentId", (req, res) => {
   const agentId = req.params.agentId;
-  if (!AGENTS[agentId]) return res.status(400).json({ error: "unknown agent" });
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
   const { model } = req.body ?? {};
   if (!model || typeof model !== "string") {
     modelOverride.delete(agentId);
@@ -214,7 +236,7 @@ app.get("/api/files", async (req, res) => {
 
 app.post("/api/chat", async (req, res) => {
   const { agentId, message } = req.body ?? {};
-  const agent = AGENTS[agentId];
+  const agent = findAgent(agentId);
   if (!agent) return res.status(400).json({ error: "unknown agent" });
   if (typeof message !== "string" || !message.trim()) {
     return res.status(400).json({ error: "empty message" });
@@ -280,7 +302,7 @@ app.post("/api/chat", async (req, res) => {
 
 app.post("/api/chat/stream", async (req, res) => {
   const { agentId, message } = req.body ?? {};
-  const agent = AGENTS[agentId];
+  const agent = findAgent(agentId);
   if (!agent) return res.status(400).json({ error: "unknown agent" });
   if (typeof message !== "string" || !message.trim()) {
     return res.status(400).json({ error: "empty message" });
@@ -421,13 +443,13 @@ app.delete("/api/memories", (_req, res) => {
 
 app.get("/api/plan/:agentId", (req, res) => {
   const agentId = req.params.agentId;
-  if (!AGENTS[agentId]) return res.status(400).json({ error: "unknown agent" });
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
   res.json({ agentId, enabled: planMode.get(agentId) === true });
 });
 
 app.post("/api/plan/:agentId", (req, res) => {
   const agentId = req.params.agentId;
-  if (!AGENTS[agentId]) return res.status(400).json({ error: "unknown agent" });
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
   const enabled = !!req.body?.enabled;
   if (enabled) planMode.set(agentId, true);
   else planMode.delete(agentId);
@@ -451,7 +473,7 @@ app.post("/api/task", async (req, res) => {
   }
 
   const assignedAgent =
-    agentOverride && AGENTS[agentOverride] ? agentOverride : await classifyTask(description);
+    agentOverride && findAgent(agentOverride) ? agentOverride : await classifyTask(description);
 
   const task: Task = {
     id: randomUUID(),
@@ -481,7 +503,7 @@ app.post("/api/task/:id/run", async (req, res) => {
     return res.status(400).json({ error: "task already " + task.status });
   }
 
-  const agent = AGENTS[task.assignedAgent];
+  const agent = findAgent(task.assignedAgent);
   if (!agent) {
     task.status = "error";
     task.error = "assigned agent no longer exists";
@@ -529,17 +551,24 @@ app.delete("/api/task/:id", (req, res) => {
   res.json({ ok: true });
 });
 
-// ----- WhisprDesk proxy -----
+// ----- WhisprDesk proxy (config via SQLite settings, env fallback) -----
 
-const WHISPRDESK_URL = (process.env.WHISPRDESK_URL ?? "http://127.0.0.1:9879").replace(/\/+$/, "");
-const WHISPRDESK_TOKEN = process.env.WHISPRDESK_TOKEN ?? "";
+function whisprdeskConfig() {
+  const url = (configValue("whisprdesk.url", "WHISPRDESK_URL") ?? "http://127.0.0.1:9879").replace(
+    /\/+$/,
+    "",
+  );
+  const token = configValue("whisprdesk.token", "WHISPRDESK_TOKEN") ?? "";
+  return { url, token };
+}
 
 app.get("/api/whisprdesk/status", async (_req, res) => {
-  if (!WHISPRDESK_TOKEN) {
+  const { url, token } = whisprdeskConfig();
+  if (!token) {
     return res.json({ configured: false });
   }
   try {
-    const r = await fetch(`${WHISPRDESK_URL}/v1/status`);
+    const r = await fetch(`${url}/v1/status`);
     const body = await r.json().catch(() => ({}));
     res.json({ configured: true, reachable: r.ok, upstream: body });
   } catch (err: any) {
@@ -548,9 +577,10 @@ app.get("/api/whisprdesk/status", async (_req, res) => {
 });
 
 app.get("/api/whisprdesk/capabilities", async (_req, res) => {
-  if (!WHISPRDESK_TOKEN) return res.status(400).json({ error: "WHISPRDESK_TOKEN not set" });
+  const { url, token } = whisprdeskConfig();
+  if (!token) return res.status(400).json({ error: "WhisprDesk token not set" });
   try {
-    const r = await fetch(`${WHISPRDESK_URL}/v1/capabilities`);
+    const r = await fetch(`${url}/v1/capabilities`);
     const body = await r.json().catch(() => ({}));
     res.status(r.status).json(body);
   } catch (err: any) {
@@ -562,14 +592,15 @@ app.post(
   "/api/whisprdesk/transcribe",
   express.raw({ type: "*/*", limit: "30mb" }),
   async (req, res) => {
-    if (!WHISPRDESK_TOKEN) return res.status(400).json({ error: "WHISPRDESK_TOKEN not set" });
+    const { url, token } = whisprdeskConfig();
+    if (!token) return res.status(400).json({ error: "WhisprDesk token not set" });
     const audio = req.body as Buffer;
     if (!audio || !audio.length) return res.status(400).json({ error: "empty body" });
     try {
-      const upstream = await fetch(`${WHISPRDESK_URL}/v1/transcribe`, {
+      const upstream = await fetch(`${url}/v1/transcribe`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${WHISPRDESK_TOKEN}`,
+          Authorization: `Bearer ${token}`,
           "Content-Type": (req.headers["content-type"] as string) ?? "audio/webm",
         },
         body: new Uint8Array(audio),
@@ -586,7 +617,8 @@ app.post(
 );
 
 app.get("/api/whisprdesk/events", async (req, res) => {
-  if (!WHISPRDESK_TOKEN) return res.status(400).end();
+  const { url, token } = whisprdeskConfig();
+  if (!token) return res.status(400).end();
 
   res.setHeader("Content-Type", "text/event-stream");
   res.setHeader("Cache-Control", "no-cache");
@@ -606,8 +638,8 @@ app.get("/api/whisprdesk/events", async (req, res) => {
   });
 
   try {
-    const upstream = await fetch(`${WHISPRDESK_URL}/v1/events`, {
-      headers: { Authorization: `Bearer ${WHISPRDESK_TOKEN}` },
+    const upstream = await fetch(`${url}/v1/events`, {
+      headers: { Authorization: `Bearer ${token}` },
       signal: ac.signal,
     });
     if (!upstream.ok || !upstream.body) {
@@ -629,6 +661,89 @@ app.get("/api/whisprdesk/events", async (req, res) => {
     }
     if (!res.writableEnded) res.end();
   }
+});
+
+// ----- Settings -----
+
+app.get("/api/settings", (_req, res) => {
+  res.json({
+    schema: SETTINGS_SCHEMA,
+    values: maskedSettings(),
+    envFallbacks: SETTINGS_SCHEMA.flatMap((s) => s.fields)
+      .filter((f) => f.envFallback && process.env[f.envFallback])
+      .map((f) => ({ key: f.key, envKey: f.envFallback, set: true })),
+  });
+});
+
+app.post("/api/settings", (req, res) => {
+  const entries = Array.isArray(req.body?.entries) ? req.body.entries : null;
+  if (!entries) return res.status(400).json({ error: "entries[] required" });
+
+  const knownKeys = new Set(
+    SETTINGS_SCHEMA.flatMap((s) => s.fields).map((f) => f.key),
+  );
+
+  let changed = 0;
+  for (const entry of entries) {
+    const { key, value, isSecret } = entry ?? {};
+    if (typeof key !== "string" || !knownKeys.has(key)) continue;
+    if (value === null || value === undefined) {
+      deleteSetting(key);
+      changed++;
+    } else if (typeof value === "string" && value.length > 0) {
+      setSetting(key, value, !!isSecret);
+      changed++;
+    }
+    // empty string = no-op (preserves existing secret when user leaves field blank)
+  }
+  res.json({ ok: true, changed });
+});
+
+app.delete("/api/settings/:key", (req, res) => {
+  const ok = deleteSetting(req.params.key);
+  res.json({ ok });
+});
+
+// ----- Custom agents CRUD -----
+
+app.get("/api/agents/:id", (req, res) => {
+  const agent = findAgent(req.params.id);
+  if (!agent) return res.status(404).json({ error: "not found" });
+  res.json({ ...agent, builtIn: isBuiltInAgent(req.params.id) });
+});
+
+app.post("/api/agents", (req, res) => {
+  try {
+    const created = createCustomAgent(req.body ?? {}, builtInIds());
+    res.json({ ...created, builtIn: false });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? "invalid input" });
+  }
+});
+
+app.patch("/api/agents/:id", (req, res) => {
+  const id = req.params.id;
+  if (isBuiltInAgent(id)) {
+    return res.status(400).json({ error: "built-in agents are read-only" });
+  }
+  const updated = updateCustomAgent(id, req.body ?? {});
+  if (!updated) return res.status(404).json({ error: "not found" });
+  // Changing system prompt or tools changes context semantics; clear session.
+  sessionByAgent.delete(id);
+  res.json({ ...updated, builtIn: false });
+});
+
+app.delete("/api/agents/:id", (req, res) => {
+  const id = req.params.id;
+  if (isBuiltInAgent(id)) {
+    return res.status(400).json({ error: "built-in agents cannot be deleted" });
+  }
+  const ok = deleteCustomAgent(id);
+  if (!ok) return res.status(404).json({ error: "not found" });
+  sessionByAgent.delete(id);
+  modelOverride.delete(id);
+  planMode.delete(id);
+  res.json({ ok: true });
 });
 
 const PORT = Number(process.env.PORT ?? 3333);
