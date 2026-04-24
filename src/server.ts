@@ -2,10 +2,37 @@ import express from "express";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import { randomUUID } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { AGENTS, AGENT_LIST, MODELS, subAgentsFor } from "./agents.js";
+
+// Minimal .env loader (no dep). Runs before any env usage below.
+(() => {
+  const envPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+    ".env",
+  );
+  try {
+    const raw = fsSync.readFileSync(envPath, "utf8");
+    for (const line of raw.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eq = trimmed.indexOf("=");
+      if (eq < 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      let value = trimmed.slice(eq + 1).trim();
+      if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+      if (!(key in process.env)) process.env[key] = value;
+    }
+  } catch {
+    /* no .env file; env-only is fine */
+  }
+})();
 import {
   listMemories,
   createMemory,
@@ -500,6 +527,108 @@ app.post("/api/task/:id/run", async (req, res) => {
 app.delete("/api/task/:id", (req, res) => {
   tasks.delete(req.params.id);
   res.json({ ok: true });
+});
+
+// ----- WhisprDesk proxy -----
+
+const WHISPRDESK_URL = (process.env.WHISPRDESK_URL ?? "http://127.0.0.1:9879").replace(/\/+$/, "");
+const WHISPRDESK_TOKEN = process.env.WHISPRDESK_TOKEN ?? "";
+
+app.get("/api/whisprdesk/status", async (_req, res) => {
+  if (!WHISPRDESK_TOKEN) {
+    return res.json({ configured: false });
+  }
+  try {
+    const r = await fetch(`${WHISPRDESK_URL}/v1/status`);
+    const body = await r.json().catch(() => ({}));
+    res.json({ configured: true, reachable: r.ok, upstream: body });
+  } catch (err: any) {
+    res.json({ configured: true, reachable: false, error: err?.message ?? "fetch failed" });
+  }
+});
+
+app.get("/api/whisprdesk/capabilities", async (_req, res) => {
+  if (!WHISPRDESK_TOKEN) return res.status(400).json({ error: "WHISPRDESK_TOKEN not set" });
+  try {
+    const r = await fetch(`${WHISPRDESK_URL}/v1/capabilities`);
+    const body = await r.json().catch(() => ({}));
+    res.status(r.status).json(body);
+  } catch (err: any) {
+    res.status(502).json({ error: err?.message ?? "upstream failed" });
+  }
+});
+
+app.post(
+  "/api/whisprdesk/transcribe",
+  express.raw({ type: "*/*", limit: "30mb" }),
+  async (req, res) => {
+    if (!WHISPRDESK_TOKEN) return res.status(400).json({ error: "WHISPRDESK_TOKEN not set" });
+    const audio = req.body as Buffer;
+    if (!audio || !audio.length) return res.status(400).json({ error: "empty body" });
+    try {
+      const upstream = await fetch(`${WHISPRDESK_URL}/v1/transcribe`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${WHISPRDESK_TOKEN}`,
+          "Content-Type": (req.headers["content-type"] as string) ?? "audio/webm",
+        },
+        body: new Uint8Array(audio),
+      });
+      const text = await upstream.text();
+      res
+        .status(upstream.status)
+        .type(upstream.headers.get("content-type") ?? "application/json")
+        .send(text);
+    } catch (err: any) {
+      res.status(502).json({ error: err?.message ?? "upstream failed" });
+    }
+  },
+);
+
+app.get("/api/whisprdesk/events", async (req, res) => {
+  if (!WHISPRDESK_TOKEN) return res.status(400).end();
+
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  (res as any).flushHeaders?.();
+
+  const ac = new AbortController();
+  const cleanup = () => {
+    try {
+      ac.abort();
+    } catch {
+      /* noop */
+    }
+  };
+  res.on("close", () => {
+    if (!res.writableEnded) cleanup();
+  });
+
+  try {
+    const upstream = await fetch(`${WHISPRDESK_URL}/v1/events`, {
+      headers: { Authorization: `Bearer ${WHISPRDESK_TOKEN}` },
+      signal: ac.signal,
+    });
+    if (!upstream.ok || !upstream.body) {
+      res.write(
+        `event: error\ndata: ${JSON.stringify({ status: upstream.status })}\n\n`,
+      );
+      return res.end();
+    }
+    const reader = upstream.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(value);
+    }
+    res.end();
+  } catch (err: any) {
+    if (err?.name !== "AbortError") {
+      res.write(`event: error\ndata: ${JSON.stringify({ error: err?.message ?? "upstream failed" })}\n\n`);
+    }
+    if (!res.writableEnded) res.end();
+  }
 });
 
 const PORT = Number(process.env.PORT ?? 3333);

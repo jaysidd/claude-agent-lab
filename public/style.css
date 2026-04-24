@@ -429,6 +429,50 @@ body {
 }
 #send:disabled { opacity: 0.4; cursor: not-allowed; }
 
+#mic-btn {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0 14px;
+  height: 42px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+#mic-btn:hover:not(:disabled) { border-color: var(--accent); }
+#mic-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+#mic-btn.recording {
+  background: #f472b6;
+  color: #0e1016;
+  border-color: transparent;
+  animation: recording-pulse 1.2s ease-in-out infinite;
+}
+#mic-btn.processing {
+  background: var(--panel-2);
+  opacity: 0.7;
+  cursor: wait;
+}
+@keyframes recording-pulse {
+  50% { box-shadow: 0 0 0 6px rgba(244, 114, 182, 0.18); }
+}
+
+.status-dot-off { background: #555; box-shadow: none; }
+.status-dot-warn { background: #fbbf24; box-shadow: 0 0 6px #fbbf24aa; }
+
+.msg-speak-btn {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  padding: 0 4px;
+  margin-left: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  opacity: 0.7;
+}
+.msg-speak-btn:hover { opacity: 1; color: var(--accent); }
+.msg-speak-btn.speaking { color: #6ee7b7; opacity: 1; }
+
 /* @file popover */
 #file-popover {
   position: absolute;

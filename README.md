@@ -42,6 +42,7 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Slash commands](#slash-commands) | Client-side interception before POST |
 | [Plan mode toggle](#plan-mode-toggle) | `permissionMode: 'plan'` |
 | [File checkpointing](#file-checkpointing) | `enableFileCheckpointing: true` (snapshots enabled; UI rewind pending) |
+| [Voice in/out via WhisprDesk](#voice-in--out-via-whisprdesk) | Not SDK — proxy to local WhisprDesk gateway + browser `SpeechSynthesis` |
 | [Abort on client disconnect](#abort-on-client-disconnect) | `abortController: AbortController` |
 | [Multi-turn per agent](#multi-turn-per-agent) | `resume: sessionId` captured from `system.init` |
 | [`@file` autocomplete](#file-autocomplete) | Not SDK — plain filesystem read + UI glue |
@@ -191,6 +192,29 @@ Per-agent state. Switching plan mode clears that agent's session (the SDK treats
 ### File checkpointing
 
 `enableFileCheckpointing: true` is set on every `query()` call. The SDK now **snapshots files before any Edit/Write** so they can be restored. The UI "roll back to this turn" affordance is on the backlog — the snapshot infrastructure is already live as of this version, so when rewind ships you'll be able to rewind turns that happened today.
+
+---
+
+### Voice in / out via WhisprDesk
+
+If you have [WhisprDesk](https://github.com/jaysidd/WhisprDesk) running locally (a personal Whisper-based dictation app by the same author), Command Center integrates with it in two ways:
+
+**Active mode (mic button):** A 🎤 button next to Send records audio via `MediaRecorder`, POSTs the blob to `POST /api/whisprdesk/transcribe` (server-side proxy that adds the Bearer header), and drops the transcript into the composer.
+
+**Passive mode (SSE listener):** When configured, the server subscribes to WhisprDesk's `/v1/events` SSE stream. Any dictation you do *anywhere* on your machine via WhisprDesk's native push-to-talk shortcut — if Command Center is the focused tab — auto-fills the composer. You keep your existing dictation muscle memory and never touch the browser mic.
+
+**Voice out:** Each agent reply gets a 🔊 button in its footer that uses the browser's built-in `SpeechSynthesis` API to read the reply aloud. Click again to stop.
+
+**Setup.** Copy the Bearer token from WhisprDesk's Settings → *External App Gateway* card into your `.env`:
+
+```
+WHISPRDESK_URL=http://127.0.0.1:9879
+WHISPRDESK_TOKEN=paste-bearer-token-here
+```
+
+Restart the server. The footer of the sidebar shows `WhisprDesk · ready` when the proxy is live and WhisprDesk is reachable, `· unreachable` if it's configured but offline, or `· off` if no token is configured.
+
+**Why this architecture.** Whisper is the best open-source STT available; running it locally means audio never leaves your machine. Rather than re-embedding Whisper in Command Center, we lean on WhisprDesk's existing gateway — one install, two apps sharing it. The token stays server-side; the browser only sees the proxy.
 
 ---
 
@@ -514,6 +538,10 @@ flowchart LR
 | `/api/task` | POST | `{description, priority?, agentId?}` | `Task` |
 | `/api/task/:id/run` | POST | — | `Task` (updated) |
 | `/api/task/:id` | DELETE | — | `{ok}` |
+| `/api/whisprdesk/status` | GET | — | `{configured, reachable?, upstream?, error?}` |
+| `/api/whisprdesk/capabilities` | GET | — | WhisprDesk's `/v1/capabilities` proxied |
+| `/api/whisprdesk/transcribe` | POST | raw audio body (≤30 MB) | `{text, provider, model, durationMs}` |
+| `/api/whisprdesk/events` | GET | — | SSE passthrough from WhisprDesk |
 
 ---
 

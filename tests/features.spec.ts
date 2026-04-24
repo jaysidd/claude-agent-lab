@@ -77,6 +77,31 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     await expect(toggle).not.toHaveClass(/active/);
   });
 
+  test("whisprdesk status endpoint reports configured state", async ({ request }) => {
+    const res = await request.get("http://localhost:3333/api/whisprdesk/status");
+    expect(res.ok()).toBe(true);
+    const data = await res.json();
+    expect(data).toHaveProperty("configured");
+    // If token isn't set, UI reports "off" gracefully
+    if (!data.configured) expect(data).toEqual({ configured: false });
+    // If it is, the reachable field should be present
+    if (data.configured) expect(typeof data.reachable).toBe("boolean");
+  });
+
+  test("mic button reflects whisprdesk availability", async ({ page }) => {
+    await page.goto("/");
+    const mic = page.locator("#mic-btn");
+    // Either disabled (not configured or unreachable) or enabled (live);
+    // the label must match.
+    const label = await page.locator("#whisprdesk-label").textContent();
+    const micDisabled = await mic.isDisabled();
+    if (/off|unreachable|error/i.test(label ?? "")) {
+      expect(micDisabled).toBe(true);
+    } else {
+      expect(micDisabled).toBe(false);
+    }
+  });
+
   test("markdown renders in completed agent messages", async ({ page }) => {
     // Use the slash command path — it writes markdown directly to the history
     // without needing the engine. /agents produces bold + list output.

@@ -252,6 +252,15 @@ function renderMessages() {
         footer.appendChild(authSpan);
       }
 
+      if (m.text && !m.streaming) attachSpeakButton(footer, m.text);
+
+      row.appendChild(footer);
+    }
+    if (m.role === "agent" && m.system && m.text && !m.streaming) {
+      // System-origin messages (slash command output) also get a speak button
+      const footer = document.createElement("div");
+      footer.className = "msg-footer";
+      attachSpeakButton(footer, m.text.replace(/[*_`#>]/g, ""));
       row.appendChild(footer);
     }
 
@@ -1090,10 +1099,175 @@ function reflectPlanMode() {
   planToggle.classList.toggle("active", on);
 }
 
+// ----- WhisprDesk voice integration -----
+
+const micBtn = document.getElementById("mic-btn");
+const whisprdeskLabel = document.getElementById("whisprdesk-label");
+const whisprdeskDot = document.getElementById("whisprdesk-dot");
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let whisprdeskConfigured = false;
+
+async function refreshWhisprDeskStatus() {
+  try {
+    const res = await fetch("/api/whisprdesk/status");
+    const data = await res.json();
+    if (!data.configured) {
+      whisprdeskDot.className = "status-dot status-dot-off";
+      whisprdeskLabel.textContent = "WhisprDesk · off";
+      micBtn.disabled = true;
+      micBtn.title = "WhisprDesk not configured. Set WHISPRDESK_TOKEN in .env and restart.";
+      return;
+    }
+    whisprdeskConfigured = true;
+    if (data.reachable) {
+      whisprdeskDot.className = "status-dot";
+      whisprdeskLabel.textContent = "WhisprDesk · ready";
+      micBtn.disabled = false;
+      micBtn.title = "Click to record — release to transcribe with WhisprDesk";
+      subscribeToWhisprDeskEvents();
+    } else {
+      whisprdeskDot.className = "status-dot status-dot-warn";
+      whisprdeskLabel.textContent = "WhisprDesk · unreachable";
+      micBtn.disabled = true;
+      micBtn.title = "WhisprDesk configured but not reachable. Is the app running?";
+    }
+  } catch {
+    whisprdeskDot.className = "status-dot status-dot-off";
+    whisprdeskLabel.textContent = "WhisprDesk · error";
+    micBtn.disabled = true;
+  }
+}
+
+micBtn.addEventListener("click", async () => {
+  if (micBtn.disabled) return;
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType =
+      MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+        ? "audio/webm;codecs=opus"
+        : MediaRecorder.isTypeSupported("audio/webm")
+          ? "audio/webm"
+          : "";
+    recordedChunks = [];
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+    mediaRecorder.addEventListener("dataavailable", (e) => {
+      if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+    });
+    mediaRecorder.addEventListener("stop", async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      const blob = new Blob(recordedChunks, { type: mimeType || "audio/webm" });
+      micBtn.classList.remove("recording");
+      await transcribeBlob(blob);
+    });
+    mediaRecorder.start();
+    micBtn.classList.add("recording");
+    micBtn.title = "Click to stop and transcribe";
+  } catch (err) {
+    alert("Microphone access denied or unavailable: " + err.message);
+  }
+});
+
+async function transcribeBlob(blob) {
+  if (!blob.size) return;
+  micBtn.classList.add("processing");
+  try {
+    const res = await fetch("/api/whisprdesk/transcribe", {
+      method: "POST",
+      headers: { "Content-Type": blob.type || "audio/webm" },
+      body: blob,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "transcription failed");
+    if (data.text) insertTextIntoComposer(data.text);
+  } catch (err) {
+    alert("Transcription failed: " + err.message);
+  } finally {
+    micBtn.classList.remove("processing");
+  }
+}
+
+function insertTextIntoComposer(text) {
+  if (!text) return;
+  const existing = input.value.trim();
+  input.value = existing ? `${existing} ${text}` : text;
+  input.dispatchEvent(new Event("input"));
+  input.focus();
+}
+
+// Passive SSE listener: if the user dictates anywhere in WhisprDesk while
+// the Command Center tab is focused, append the text to the composer.
+let whisprdeskEvents = null;
+function subscribeToWhisprDeskEvents() {
+  if (whisprdeskEvents) return;
+  try {
+    whisprdeskEvents = new EventSource("/api/whisprdesk/events");
+    const handler = (e) => {
+      if (!document.hasFocus()) return; // only when user is on this tab
+      if (!state.activeAgentId) return;
+      try {
+        const data = JSON.parse(e.data);
+        const text = data.text ?? data.transcript ?? data.transcription;
+        if (text && typeof text === "string") insertTextIntoComposer(text);
+      } catch {
+        /* not JSON; ignore */
+      }
+    };
+    whisprdeskEvents.addEventListener("transcription", handler);
+    whisprdeskEvents.addEventListener("message", handler);
+    whisprdeskEvents.addEventListener("error", () => {
+      whisprdeskEvents?.close();
+      whisprdeskEvents = null;
+      // Quietly retry after a few seconds
+      setTimeout(refreshWhisprDeskStatus, 5000);
+    });
+  } catch {
+    whisprdeskEvents = null;
+  }
+}
+
+// ----- TTS (browser-native) speak button on agent messages -----
+
+let activeUtterance = null;
+
+function attachSpeakButton(footerEl, text) {
+  if (typeof speechSynthesis === "undefined") return;
+  const btn = document.createElement("button");
+  btn.className = "msg-speak-btn";
+  btn.type = "button";
+  btn.title = "Read aloud";
+  btn.textContent = "🔊";
+  btn.addEventListener("click", () => {
+    if (activeUtterance && speechSynthesis.speaking) {
+      speechSynthesis.cancel();
+      document
+        .querySelectorAll(".msg-speak-btn.speaking")
+        .forEach((el) => el.classList.remove("speaking"));
+      activeUtterance = null;
+      return;
+    }
+    const u = new SpeechSynthesisUtterance(text);
+    u.rate = 1.05;
+    u.pitch = 1.0;
+    u.onend = () => btn.classList.remove("speaking");
+    u.onerror = () => btn.classList.remove("speaking");
+    btn.classList.add("speaking");
+    activeUtterance = u;
+    speechSynthesis.speak(u);
+  });
+  footerEl.appendChild(btn);
+}
+
 (async () => {
   await loadModels();
   await loadCwd();
   await loadAgents();
   await refreshTasks();
   await refreshMemories();
+  await refreshWhisprDeskStatus();
 })();

@@ -25,6 +25,10 @@
           <span class="status-dot"></span>
           <span>Max plan · local</span>
         </div>
+        <div class="footer-row" id="whisprdesk-status" title="WhisprDesk integration status">
+          <span class="status-dot status-dot-off" id="whisprdesk-dot"></span>
+          <span id="whisprdesk-label">WhisprDesk · off</span>
+        </div>
       </footer>
     </aside>
 
@@ -64,6 +68,7 @@
           ></textarea>
           <div id="file-popover" class="hidden"></div>
         </div>
+        <button id="mic-btn" type="button" title="Record with WhisprDesk (configure in .env)" disabled>🎤</button>
         <button id="send" type="submit" disabled>Send</button>
       </form>
     </main>
