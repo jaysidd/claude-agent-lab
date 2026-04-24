@@ -93,6 +93,8 @@ async function loadCwd() {
 
 function renderAgents() {
   agentListEl.innerHTML = "";
+  const countEl = document.getElementById("agent-count");
+  if (countEl) countEl.textContent = state.agents.length;
   for (const agent of state.agents) {
     const el = document.createElement("div");
     el.className =
@@ -1012,10 +1014,38 @@ function handleSlashCommand(text) {
         "- `/clear` — start a new conversation with this agent",
         "- `/model <id>` — switch model (opus, sonnet, haiku)",
         "- `/model` — show the current model + options",
+        "- `/think hard` — switch this agent to Opus (more careful thinking)",
+        "- `/think fast` — switch this agent to Haiku (snappy, cheap)",
+        "- `/think default` — reset to this agent's configured model",
         "- `/agents` — list all agents and their purpose",
         "- `/plan on|off` — toggle plan mode for this agent",
         "- `/help` — this message",
       ].join("\n"),
+    );
+    return true;
+  }
+
+  if (cmd === "think") {
+    const agent = state.agents.find((a) => a.id === agentId);
+    const mapping = {
+      hard: { id: "claude-opus-4-7", label: "Opus 4.7" },
+      fast: { id: "claude-haiku-4-5", label: "Haiku 4.5" },
+      default: { id: agent?.defaultModel, label: null },
+    };
+    const key = arg.toLowerCase();
+    if (!mapping[key]) {
+      say("Use `/think hard` (Opus), `/think fast` (Haiku), or `/think default` (agent's configured model).");
+      return true;
+    }
+    const target = mapping[key];
+    if (!target.id) {
+      say("⚠️ Couldn't resolve the default model for this agent.");
+      return true;
+    }
+    changeAgentModel(target.id);
+    const niceName = target.label ?? prettyModel(target.id);
+    say(
+      `**${agent?.name}** will now use \`${niceName}\` for this conversation. Use \`/think default\` to reset.`,
     );
     return true;
   }
