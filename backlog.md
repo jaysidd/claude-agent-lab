@@ -1,8 +1,11 @@
 # Command Center — Sequential Backlog
 
-> Last Updated: 2026-04-24 (C08–C11 shipped; C12 partial)
-> Total items: 18 (7 foundation + 11 planned features + future list)
-> Completed: F1–F7 foundation + C01 + C02 + C03 + C06 + C08 + C09 + C10 + C11 + C12 (snapshot infra only)
+> Last Updated: 2026-04-25 (Package A shipped; GitHub Pages live; Clawless cross-promo)
+> Total items: 18+ (7 foundation + 14 planned features shipped + future list)
+> Completed: F1–F7 + C01 + C02 + C03 + C06 + C08 + C09 + C10 + C11 + C13 + C14 + C15 + A1 + A2 + A3
+> C12 was partial then reverted — flag pulled in the audit sweep, follow-up tracked
+> Public surface: github.com/jaysidd/claude-agent-lab + jaysidd.github.io/claude-agent-lab/
+> Tests: 22 smoke + 2 @engine = 24, all green
 
 > **Work order**: Items are numbered C##. Complete them in order unless a higher-priority need lands.
 >
@@ -264,3 +267,14 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 | 2026-04-24 | C12 PARTIAL | `enableFileCheckpointing: true` is now set on every chat/stream/task `query()` call — snapshots are captured. UI rewind-to-user-message is deferred because `Query.rewindFiles()` requires holding the Query object alive across requests, which needs a streaming-input architecture. Added as `C12-follow-up` in the future list. |
 | 2026-04-24 | Docs | `docs/drafts/linkedin-project-entry.md` added — copy-paste-ready content for LinkedIn Projects section. |
 | 2026-04-24 | C13 DONE | WhisprDesk voice integration. Local HTTP proxy routes (`/api/whisprdesk/{status,capabilities,transcribe,events}`) forwarding to WhisprDesk's External App Gateway on `127.0.0.1:9879`. Browser mic button (MediaRecorder → proxy → transcript). Passive SSE listener auto-fills composer from any WhisprDesk dictation when tab is focused. Browser `SpeechSynthesis` speak button on each agent reply. Sidebar status indicator. Minimal .env loader added. Token stays server-side. |
+| 2026-04-24 | C14 + C15 DONE | Settings modal (SQLite-backed config with env fallback, secrets masked) and dynamic agents (CRUD, custom_agents table, sidebar + New agent button). Closes the operator-surface gap from the audit. |
+| 2026-04-24 | Audit sweep DONE | Architect/Reviewer/QA agents identified UI-vs-backend gaps + correctness issues. Closed all 13: Telegram fields disabled with "coming soon", `enableFileCheckpointing` flag removed, 4 dead routes deleted, memory validation fixes, race conditions, error-path logging, brittle test hardening. |
+| 2026-04-24 | Sidebar UX | "+ New agent" promoted from a muted dashed button to a prominent gradient primary action. `/think hard\|fast\|default` slash aliases added on top of `/model`. |
+| 2026-04-24 | Voice UX hardening | Mic button shows ⏹ icon when recording + pink "Recording / click ⏹ to stop" indicator with live timer. Errors from the WhisprDesk proxy now surface upstream details so failures are debuggable. |
+| 2026-04-25 | Voice fixes | Browser-side WebM→WAV conversion (Web Audio API + PCM 16-bit encoder) so WhisprDesk's ffmpeg never chokes on streaming-EBML quirks. Shortcut switched from ⌘⇧M to **⌥V** (avoids Chrome user-switcher / macOS minimize collisions). |
+| 2026-04-25 | A1 DONE | Cost & token tracking, OAuth-aware. Per-message footer always shows tokens; $ only when API-key auth. Session-totals chip in chat header. SDK's `total_cost_usd` used directly — no client-side pricing table. |
+| 2026-04-25 | A2 DONE | Session history. Two new SQLite tables (`sessions`, `session_messages`); `appendTurn()` transactional; auto-titles from first user message. 📜 History modal lists past conversations grouped by agent; click any to restore via `resume:`. |
+| 2026-04-25 | A3 DONE | Conversation export. `/export`, `/export md`, `/export json` slash commands generate downloads client-side from existing chat state. Markdown is publish-friendly, JSON keeps raw `usage` objects for downstream analysis. |
+| 2026-04-25 | GitHub Pages | Pages enabled at `jaysidd.github.io/claude-agent-lab/` (source: main / root). Repo homepage URL set so the github.com sidebar shows the live URL. README is auto-served as the index by Jekyll. |
+| 2026-04-25 | Marketing | Replaced 3 OpenCode references with [Clawless](https://clawless.ai/) cross-promo (intro, "what this is not", acknowledgements). Honest "same author" disclosures kept in each. README also documents history/cost/export sections with the two new screenshots (13-history-modal, 14-chat-with-usage). |
+| 2026-04-25 | Mermaid fix | Streaming sequence-diagram Note text rewritten to plain prose — semicolons and parens were tripping GitHub's mermaid parser. Audit confirmed no other Notes have parser tripwires. |

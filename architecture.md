@@ -43,19 +43,47 @@ One OS process. No IPC, no WebSockets (yet), no secondary server. The `claude` b
 
 | Path | Role | LOC |
 |---|---|---|
-| `src/server.ts` | Express app, API routes, SDK call sites (chat, chat/stream, tasks, cwd, files, model) + classifier | ~300 |
-| `src/agents.ts` | Agent configs + router helper (`subAgentsFor`) | ~120 |
-| `src/hello.ts` | One-shot URL summarizer (smoke test) | ~15 |
-| `public/index.html` | UI markup (sidebar, chat, folder modal, task modal) | ~100 |
-| `public/style.css` | Dark command-center theme | ~580 |
-| `public/app.js` | Frontend logic: agents, streaming chat, folder picker, @file, task board | ~620 |
-| `playwright.config.ts` | Two projects: smoke (offline) + engine (@engine-tagged, real SDK) | — |
+| `src/server.ts` | Express app, all `/api/*` routes, SDK call sites for chat + chat/stream + task runs, classifier, .env loader, WhisprDesk proxy, Settings + Sessions + custom-agent CRUD wiring | ~700 |
+| `src/agents.ts` | Built-in agent configs (Main / Comms / Content / Ops) + MODELS table | ~120 |
+| `src/agentRegistry.ts` | Merges built-ins + custom agents at runtime; `findAgent()`, `allAgents()`, `subAgentsFor()`, `isBuiltInAgent()`, `builtInIds()` | ~40 |
+| `src/customAgents.ts` | SQLite CRUD for `custom_agents` table — create / update / delete / find | ~140 |
+| `src/memory.ts` | better-sqlite3 init (shared db at `data/lab.db`), `memories` schema, CRUD, `augmentedSystemPrompt()` injection helper | ~130 |
+| `src/settings.ts` | `settings` table + schema, `configValue(dbKey, envKey)` reader with env-fallback, masked-secret API for the UI | ~150 |
+| `src/sessions.ts` | `sessions` + `session_messages` tables, transactional `appendTurn()`, auto-titling, restore helpers | ~160 |
+| `src/hello.ts` | One-shot URL summarizer (smoke test entry; `npm run hello`) | ~15 |
+| `public/index.html` | All UI markup — sidebar, chat, modals (folder, tasks, memory, settings, agent editor, history) | ~140 |
+| `public/style.css` | Dark command-center theme; markdown rendering; modal + popover + voice indicator styles | ~900 |
+| `public/app.js` | Frontend — agents, streaming chat with WAV-conversion mic, folder picker, @file + slash-command popovers, task board, memory + settings + agent + history modals, slash dispatcher, /think + /export + /plan, mic ⌥V shortcut, session usage chip, restore flow | ~1,100 |
+| `scripts/screenshot.mjs` | Playwright script that regenerates all 14 README screenshots | ~140 |
+| `scripts/launch-command-center.command` | Move-safe Desktop launcher (auto-locates project via candidate list; pkill + lsof retries) | ~150 |
+| `playwright.config.ts` | Two projects: `smoke` (offline) + `engine` (@engine-tagged, real SDK) | — |
 | `tests/smoke.spec.ts` | 7 offline UI tests | — |
-| `tests/chat.spec.ts` | 2 @engine tests (streaming chat, task classification) | — |
-| `package.json` | npm scripts + deps | — |
-| `tsconfig.json` | TS config (ESM, ES2022, strict) | — |
+| `tests/features.spec.ts` | 14 offline feature tests (memory, slash, custom agents, settings, etc.) | — |
+| `tests/chat.spec.ts` | 2 @engine tests (streaming reply, task classifier) | — |
 
-Total hand-written: ~1,800 LOC across the whole project. By design. Everything the SDK gives us for free stays in the SDK.
+Total hand-written: ~2,500 LOC across the whole project. By design. Everything the SDK gives us for free stays in the SDK.
+
+### Module dependency map
+
+```
+       ┌────────────┐
+       │ memory.ts  │   ← opens the shared SQLite db (data/lab.db)
+       └─────┬──────┘
+             │ exports `db`
+   ┌─────────┼──────────────┬──────────────┐
+   ▼         ▼              ▼              ▼
+settings  customAgents   sessions      (memory itself)
+   │         │              │
+   └─────────┼──────────────┘
+             │
+             ▼
+      agentRegistry.ts ── merges built-ins + custom
+             │
+             ▼
+         server.ts ── wires it all up + API surface
+```
+
+`memory.ts` is the dependency root because it owns the shared SQLite handle. Every other DB-touching module imports `db` from there. `agentRegistry` is the only module that can answer "is this agent built-in or custom?"
 
 ---
 

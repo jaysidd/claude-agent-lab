@@ -239,21 +239,53 @@ claude-agent-lab/
 
 ---
 
-## Current Status (as of 2026-04-23)
+## Current Status (as of 2026-04-25)
 
-### Completed
-- F1 Express + SDK scaffold
-- F2 Multi-agent sidebar (Main / Comms / Content / Ops)
-- F3 Per-agent system prompts, tool allowlists, session persistence
-- F4 Folder picker + cwd scoping
-- F5 `@file` autocomplete
-- F6 Model selector per agent (Opus/Sonnet/Haiku, with defaults)
-- F7 Model + auth footer on each reply
+### Public surface
+- **Repo**: https://github.com/jaysidd/claude-agent-lab (public, MIT)
+- **Pages site**: https://jaysidd.github.io/claude-agent-lab/ (auto-rebuilds on push)
+- **Tests**: 22 smoke (offline) + 2 @engine (real SDK) = 24 total, all green
+- **LOC**: ~2,500 hand-written across `src/`, `public/`, `tests/`, `scripts/`
 
-### Next up (backlog)
-- **C01** Sub-agent delegation (Main auto-routes to Comms/Content/Ops via SDK `agents:` option)
-- **C02** Streaming responses (token-by-token via SSE)
-- **C03** Task queue with LLM auto-routing
-- **C04** Persistent memory (SQLite)
-- **C05** Telegram bridge
-- **C06** Playwright smoke tests
+### Foundation (all DONE)
+F1–F7: scaffold, multi-agent sidebar, per-agent prompts/tools/sessions, folder picker, `@file` autocomplete, model selector, auth+model footer.
+
+### Features shipped (all DONE)
+| # | Feature | Notes |
+|---|---|---|
+| C01 | Sub-agent delegation | Main routes via SDK `agents:` option; 🤝 chips |
+| C02 | Token-by-token streaming | NDJSON; `includePartialMessages: true` |
+| C03 | Task queue + Haiku auto-routing | Three-column board, classifier in `server.ts` |
+| C06 | Playwright smoke + engine | Two projects in playwright.config.ts |
+| C08 | Markdown rendering | marked + DOMPurify + highlight.js via jsDelivr |
+| C09 | Persistent memory (SQLite) | better-sqlite3 at `data/lab.db`; injected as `<persistent-memory>` |
+| C10 | Slash commands + autocomplete popover | `/help`, `/clear`, `/agents`, `/model`, `/think`, `/plan`, `/export` |
+| C11 | Plan mode | Per-agent `permissionMode: 'plan'` toggle |
+| C12 | (file checkpointing — flag pulled in audit; UI deferred) | See backlog `C12-follow-up` |
+| C13 | WhisprDesk voice | Mic + SSE listener + speak button; WAV conversion in browser; ⌥V shortcut |
+| C14 | Settings modal | SQLite-backed; secrets masked; env-var fallback |
+| C15 | Custom agents (CRUD) | `+ New agent`; SQLite-backed; built-ins read-only |
+| A1 | Cost & token tracking | OAuth-aware (no $ for Max plan); per-message + session totals |
+| A2 | Session history + restore | Conversations persist; click any past session to resume |
+| A3 | Conversation export | `/export md` and `/export json` slash commands |
+
+### Operational state
+- Server: `npm run serve` on `127.0.0.1:3333` (LAN-isolated)
+- Launcher: `~/Desktop/Command Center.command` — auto-finds the project via candidate list (works whether it's at `~/Desktop/claude-agent-lab` or `~/Documents/projects/claude-agent-lab` etc.)
+- WhisprDesk: integrated via Settings modal, model "base" downloaded, ⌥V toggles recording
+- Pages: auto-rebuilds within ~60 s of any push to `main`
+
+### Top backlog candidates (next session)
+- **C05 Telegram bridge** — Settings fields exist with "coming soon" badge; needs the listener code
+- **C12-follow-up File rewind UI** — needs streaming-input refactor to keep Query alive
+- **Keyboard shortcuts hub** — Cmd+K agent switcher, Cmd+T tasks, Cmd+; settings
+- **Context pinning per agent** — pin a file/snippet that's auto-prepended each turn
+- **MCP configuration UI** — let users add stdio/HTTP MCP servers per agent
+- **Skills panel** — UI for `.claude/skills/*/SKILL.md` in cwd
+- **Sub-agent depth limit** — `maxTurns` safety rail
+
+### Where to look first when picking up cold
+1. **`.notes/handoff.md`** — the most recent session-end notes (private, gitignored)
+2. **`backlog.md`** — full sequential backlog with change log at the bottom
+3. **`architecture.md`** — module-by-module file map + design decisions
+4. **`git log --oneline | head -20`** — last ~20 commits for the recent shape of changes
