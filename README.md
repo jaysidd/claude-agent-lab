@@ -21,7 +21,7 @@ A YouTuber demonstrated a "command center" agent dashboard built on an open-sour
 
 The answer: when Claude is the target model, the SDK collapses the engine layer to a function call. Command Center exists as a concrete, readable example of how thin that layer can be — and a sandbox to explore what the SDK makes easy that used to be hard.
 
-If you need multi-provider (OpenAI / Ollama / OpenRouter / local), this isn't the right starting point — look at [OpenCode](https://github.com/sst/opencode), which provides a provider abstraction that the Agent SDK deliberately does not.
+If you need multi-provider (OpenAI / Ollama / OpenRouter / local), this isn't the right starting point — check out **[Clawless](https://clawless.ai/)**, a polished desktop app I'm building with full multi-provider support (Anthropic, OpenAI, Gemini, Ollama, and more). Same author as this lab. *Public launch in ~2 weeks — visit [clawless.ai](https://clawless.ai/) for early-access updates.*
 
 ---
 
@@ -730,7 +730,7 @@ Ideas worth reading about that landed in the "Future — not scheduled" list: vo
 ## What this is not
 
 - **Not a product.** No service, no accounts, no billing, no hosted version.
-- **Not multi-provider.** Claude only. For OpenAI / Ollama / OpenRouter / local models, use [OpenCode](https://github.com/sst/opencode).
+- **Not multi-provider.** Claude only. For OpenAI / Ollama / OpenRouter / local models, the natural next step is **[Clawless](https://clawless.ai/)** — a commercial desktop app from the same author with full multi-provider support. Coming soon.
 - **Not for anyone else's Max plan.** If you want to build a Max-plan-powered app for other people, you can't — see [Authentication](#authentication).
 
 ---
@@ -750,7 +750,7 @@ The six-role dev-team convention the repo uses (Architect → Developer → Revi
 - **Anthropic** for the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) and for making `@anthropic-ai/claude-agent-sdk` open and approachable.
 - **[WhisprDesk](https://whisprdesk.com/)** — the one-time-$29 local Whisper dictation app that Command Center's voice layer integrates with. Audio stays on your Mac; the gateway pattern means *any* app on your machine can share the STT pipeline.
 - The YouTuber who demonstrated a command-center pattern on top of OpenClaw and got me thinking about how thin this layer could actually be when Claude is the target model.
-- [OpenCode](https://github.com/sst/opencode) for being the right answer to "what if I need multi-provider?"
+- **[Clawless](https://clawless.ai/)** — my own desktop app with full multi-provider AI support, the natural next step if you outgrow this lab's Claude-only scope. Coming soon.
 
 ---
 
