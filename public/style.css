@@ -391,6 +391,26 @@ body {
 }
 .msg-footer .auth-oauth { color: #6ee7b7; }
 .msg-footer .auth-key { color: #fbbf24; }
+.msg-footer .usage-chip {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.msg-footer .usage-chip .usage-cost { color: #fbbf24; }
+
+.session-usage {
+  font-size: 11px;
+  font-family: "SF Mono", Menlo, monospace;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 9px;
+  white-space: nowrap;
+  cursor: help;
+}
+.session-usage .usage-cost { color: #fbbf24; }
 
 #messages {
   overflow-y: auto;

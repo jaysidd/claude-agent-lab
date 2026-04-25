@@ -249,6 +249,9 @@ app.post("/api/chat", async (req, res) => {
   let newSessionId: string | undefined;
   let reportedModel: string | undefined;
   let apiKeySource: string | undefined;
+  let usage: any = undefined;
+  let totalCostUsd: number | undefined;
+  let numTurns: number | undefined;
 
   try {
     const subAgents = subAgentsFor(agent.id);
@@ -277,8 +280,11 @@ app.post("/api/chat", async (req, res) => {
           }
         }
       }
-      if ("result" in anyMsg && typeof anyMsg.result === "string") {
-        finalText = anyMsg.result;
+      if (anyMsg.type === "result") {
+        if (typeof anyMsg.result === "string") finalText = anyMsg.result;
+        if (anyMsg.usage) usage = anyMsg.usage;
+        if (typeof anyMsg.total_cost_usd === "number") totalCostUsd = anyMsg.total_cost_usd;
+        if (typeof anyMsg.num_turns === "number") numTurns = anyMsg.num_turns;
       }
     }
   } catch (err: any) {
@@ -295,6 +301,9 @@ app.post("/api/chat", async (req, res) => {
     model: reportedModel ?? modelId,
     apiKeySource,
     planMode: plan,
+    usage,
+    totalCostUsd,
+    numTurns,
   });
 });
 
@@ -383,8 +392,16 @@ app.post("/api/chat/stream", async (req, res) => {
         continue;
       }
 
-      if ("result" in anyMsg && typeof anyMsg.result === "string") {
-        write({ kind: "result", text: anyMsg.result });
+      if (anyMsg.type === "result") {
+        if (typeof anyMsg.result === "string") {
+          write({ kind: "result", text: anyMsg.result });
+        }
+        write({
+          kind: "usage",
+          usage: anyMsg.usage,
+          totalCostUsd: anyMsg.total_cost_usd,
+          numTurns: anyMsg.num_turns,
+        });
       }
     }
   } catch (err: any) {

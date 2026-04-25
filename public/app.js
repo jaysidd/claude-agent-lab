@@ -38,6 +38,88 @@ function prettyModel(id) {
   return m ? m.label : id;
 }
 
+function formatTokens(n) {
+  if (n == null) return "—";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
+  return String(n);
+}
+
+function formatCost(n) {
+  if (n == null) return "";
+  if (n === 0) return "$0";
+  if (n < 0.01) return "$" + n.toFixed(4);
+  return "$" + n.toFixed(2);
+}
+
+// Sum of input + output tokens (ignoring cache info — that's "free" for the user)
+function totalTokens(usage) {
+  if (!usage) return 0;
+  return (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+}
+
+function isOAuth(apiKeySource) {
+  return apiKeySource === "none" || apiKeySource === "oauth";
+}
+
+// Session-wide totals tracker, keyed by agent id
+state.sessionTotals = {};
+
+function bumpSessionTotals(agentId, msg) {
+  if (!agentId) return;
+  const t = state.sessionTotals[agentId] ?? {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheCreationInputTokens: 0,
+    cacheReadInputTokens: 0,
+    costUsd: 0,
+    turns: 0,
+    apiKeySource: null,
+  };
+  if (msg.usage) {
+    t.inputTokens += msg.usage.input_tokens ?? 0;
+    t.outputTokens += msg.usage.output_tokens ?? 0;
+    t.cacheCreationInputTokens += msg.usage.cache_creation_input_tokens ?? 0;
+    t.cacheReadInputTokens += msg.usage.cache_read_input_tokens ?? 0;
+  }
+  if (typeof msg.totalCostUsd === "number") t.costUsd += msg.totalCostUsd;
+  t.turns += 1;
+  t.apiKeySource = msg.apiKeySource ?? t.apiKeySource;
+  state.sessionTotals[agentId] = t;
+}
+
+function renderSessionUsage() {
+  const el = document.getElementById("session-usage");
+  if (!el) return;
+  const t = state.sessionTotals[state.activeAgentId];
+  if (!t || t.turns === 0) {
+    el.classList.add("hidden");
+    el.textContent = "";
+    return;
+  }
+  const total = t.inputTokens + t.outputTokens;
+  const showCost = !isOAuth(t.apiKeySource);
+  el.classList.remove("hidden");
+  el.innerHTML = "";
+  const tokenSpan = document.createElement("span");
+  tokenSpan.textContent = `${formatTokens(total)} tk · ${t.turns} turn${t.turns === 1 ? "" : "s"}`;
+  el.appendChild(tokenSpan);
+  if (showCost && t.costUsd > 0) {
+    const costSpan = document.createElement("span");
+    costSpan.className = "usage-cost";
+    costSpan.textContent = " · " + formatCost(t.costUsd);
+    el.appendChild(costSpan);
+  }
+  // Tooltip with breakdown
+  const cacheNote =
+    t.cacheReadInputTokens > 0
+      ? ` · ${formatTokens(t.cacheReadInputTokens)} from cache`
+      : "";
+  el.title = isOAuth(t.apiKeySource)
+    ? `Session totals — Max plan, no per-turn cost.\n${formatTokens(t.inputTokens)} in · ${formatTokens(t.outputTokens)} out${cacheNote}\n${t.turns} agent turn${t.turns === 1 ? "" : "s"}.`
+    : `Session totals — API key billing.\n${formatTokens(t.inputTokens)} in · ${formatTokens(t.outputTokens)} out${cacheNote}\n${formatCost(t.costUsd)} across ${t.turns} turn${t.turns === 1 ? "" : "s"}.`;
+}
+
 function renderMarkdown(text) {
   if (typeof marked === "undefined" || typeof DOMPurify === "undefined") {
     return null;
@@ -175,6 +257,7 @@ function selectAgent(id) {
   renderModelSelect();
   reflectPlanMode();
   renderMessages();
+  renderSessionUsage();
   input.focus();
 }
 
@@ -281,6 +364,26 @@ function renderMessages() {
         footer.appendChild(authSpan);
       }
 
+      if (m.usage) {
+        const usageSpan = document.createElement("span");
+        usageSpan.className = "usage-chip";
+        const tokens = totalTokens(m.usage);
+        const tokensTxt = `📊 ${formatTokens(tokens)} tk`;
+        const showCost = !isOAuth(m.apiKeySource) && typeof m.totalCostUsd === "number" && m.totalCostUsd > 0;
+        if (showCost) {
+          usageSpan.innerHTML =
+            `${tokensTxt} · <span class="usage-cost">${formatCost(m.totalCostUsd)}</span>`;
+        } else {
+          usageSpan.textContent = tokensTxt;
+        }
+        usageSpan.title =
+          `${m.usage.input_tokens ?? 0} in · ${m.usage.output_tokens ?? 0} out` +
+          (m.usage.cache_read_input_tokens
+            ? ` · ${m.usage.cache_read_input_tokens} from cache`
+            : "");
+        footer.appendChild(usageSpan);
+      }
+
       if (m.text && !m.streaming) attachSpeakButton(footer, m.text);
 
       row.appendChild(footer);
@@ -344,6 +447,10 @@ async function sendMessage(text) {
         if (ev.kind === "init") {
           agentMsg.model = ev.model;
           agentMsg.apiKeySource = ev.apiKeySource;
+        } else if (ev.kind === "usage") {
+          agentMsg.usage = ev.usage;
+          agentMsg.totalCostUsd = ev.totalCostUsd;
+          agentMsg.numTurns = ev.numTurns;
         } else if (ev.kind === "text_delta") {
           agentMsg.text += ev.text;
           // Fast path: update the cached body element directly
@@ -376,7 +483,9 @@ async function sendMessage(text) {
   } finally {
     agentMsg.streaming = false;
     state.pending = false;
+    if (agentMsg.usage) bumpSessionTotals(agentId, agentMsg);
     renderMessages();
+    renderSessionUsage();
   }
 }
 
@@ -469,7 +578,9 @@ resetBtn.addEventListener("click", async () => {
   if (!state.activeAgentId) return;
   await fetch(`/api/reset/${state.activeAgentId}`, { method: "POST" });
   state.conversations[state.activeAgentId] = [];
+  delete state.sessionTotals[state.activeAgentId];
   renderMessages();
+  renderSessionUsage();
 });
 
 modelSelect.addEventListener("change", async () => {
@@ -591,8 +702,10 @@ async function saveCwd(targetPath) {
     state.cwd = data.cwd;
     cwdLabel.textContent = shortenPath(state.cwd);
     state.conversations = {};
+    state.sessionTotals = {};
     closeCwdModal();
     renderMessages();
+    renderSessionUsage();
   } catch (err) {
     alert("Could not set folder: " + err.message);
   }
