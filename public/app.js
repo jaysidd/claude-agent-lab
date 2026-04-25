@@ -1150,6 +1150,14 @@ function handleSlashCommand(text) {
         "- `/agents` — list all agents and their purpose",
         "- `/plan on|off` — toggle plan mode for this agent",
         "- `/help` — this message",
+        "",
+        "**Keyboard shortcuts**",
+        "- `⌘⇧M` — start / stop WhisprDesk recording (when the tab is focused)",
+        "- `Enter` — send message",
+        "- `Shift+Enter` — newline in the composer",
+        "- `@` — file autocomplete for the current folder",
+        "- `/` — slash command autocomplete",
+        "- `Esc` — dismiss any open popover",
       ].join("\n"),
     );
     return true;
@@ -1731,7 +1739,7 @@ async function refreshWhisprDeskStatus() {
       whisprdeskDot.className = "status-dot";
       whisprdeskLabel.textContent = "WhisprDesk · ready";
       micBtn.disabled = false;
-      micBtn.title = "Click to record — release to transcribe with WhisprDesk";
+      micBtn.title = "Click (or ⌘⇧M) to record — click again to stop, then Enter to send";
       subscribeToWhisprDeskEvents();
     } else {
       whisprdeskDot.className = "status-dot status-dot-warn";
@@ -1745,6 +1753,32 @@ async function refreshWhisprDeskStatus() {
     micBtn.disabled = true;
   }
 }
+
+// Global keyboard shortcut: Cmd+Shift+M (macOS) or Ctrl+Shift+M (other)
+// toggles recording. Skipped while a modal is open, or when a text field
+// besides the chat composer has focus (so the user can still type M in
+// settings fields).
+document.addEventListener("keydown", (e) => {
+  const isMetaShiftM =
+    (e.metaKey || e.ctrlKey) && e.shiftKey && (e.code === "KeyM" || e.key === "M" || e.key === "m");
+  if (!isMetaShiftM) return;
+  if (micBtn.disabled) return;
+  // Don't trigger if a modal is open — user is probably configuring
+  const anyModalOpen = document.querySelector(".modal-overlay:not(.hidden)");
+  if (anyModalOpen) return;
+  // Don't trigger inside unrelated text inputs (settings modal inputs, etc.)
+  const ae = document.activeElement;
+  if (
+    ae &&
+    ae !== input &&
+    (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA") &&
+    !ae.readOnly
+  ) {
+    return;
+  }
+  e.preventDefault();
+  micBtn.click();
+});
 
 micBtn.addEventListener("click", async () => {
   if (micBtn.disabled) return;
