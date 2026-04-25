@@ -473,9 +473,8 @@ sequenceDiagram
     Srv-->>UI: {"kind":"result","text":"..."}
   end
   Srv-->>UI: {"kind":"done"}
-  Note over UI,Srv: res.end(); socket closes normally
-
-  Note over UI,Srv: If client disconnects:<br/>res.on("close") fires →<br/>abortController.abort() →<br/>SDK iterator stops
+  Note over UI,Srv: server ends the response and the socket closes normally
+  Note over UI,Srv: If the client disconnects mid-stream<br/>the res close event triggers abortController.abort<br/>which stops the SDK iterator
 ```
 
 **Wire shape** (real sample):
