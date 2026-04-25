@@ -1688,6 +1688,32 @@ const whisprdeskDot = document.getElementById("whisprdesk-dot");
 let mediaRecorder = null;
 let recordedChunks = [];
 let whisprdeskConfigured = false;
+let recordingTimerInterval = null;
+
+const micIcon = document.getElementById("mic-icon");
+const recordingIndicator = document.getElementById("recording-indicator");
+const recordingTimer = recordingIndicator?.querySelector(".rec-timer");
+
+function showRecordingUI(show) {
+  if (!recordingIndicator) return;
+  if (show) {
+    recordingIndicator.classList.remove("hidden");
+    micIcon.textContent = "⏹";
+    const startedAt = Date.now();
+    recordingTimer.textContent = "0:00";
+    recordingTimerInterval = setInterval(() => {
+      const s = Math.floor((Date.now() - startedAt) / 1000);
+      recordingTimer.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    }, 500);
+  } else {
+    recordingIndicator.classList.add("hidden");
+    micIcon.textContent = "🎤";
+    if (recordingTimerInterval) {
+      clearInterval(recordingTimerInterval);
+      recordingTimerInterval = null;
+    }
+  }
+}
 
 async function refreshWhisprDeskStatus() {
   try {
@@ -1743,11 +1769,13 @@ micBtn.addEventListener("click", async () => {
       stream.getTracks().forEach((t) => t.stop());
       const blob = new Blob(recordedChunks, { type: mimeType || "audio/webm" });
       micBtn.classList.remove("recording");
+      showRecordingUI(false);
       await transcribeBlob(blob);
     });
     mediaRecorder.start();
     micBtn.classList.add("recording");
     micBtn.title = "Click to stop and transcribe";
+    showRecordingUI(true);
   } catch (err) {
     alert("Microphone access denied or unavailable: " + err.message);
   }

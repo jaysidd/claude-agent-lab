@@ -565,6 +565,7 @@ body {
   border-top: 1px solid var(--border);
   background: var(--bg);
   align-items: flex-end;
+  position: relative;
 }
 
 .composer-wrap { position: relative; flex: 1; }
@@ -616,6 +617,55 @@ body {
   color: #0e1016;
   border-color: transparent;
   animation: recording-pulse 1.2s ease-in-out infinite;
+}
+#mic-btn.recording #mic-icon {
+  font-size: 14px;
+}
+
+#recording-indicator {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 28px;
+  right: 28px;
+  background: rgba(244, 114, 182, 0.12);
+  border: 1px solid rgba(244, 114, 182, 0.35);
+  color: #f9a8d4;
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: inherit;
+  z-index: 5;
+  animation: indicator-fade-in 0.2s ease-out;
+}
+#recording-indicator .rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f472b6;
+  animation: recording-pulse 1.2s ease-in-out infinite;
+}
+#recording-indicator .rec-label { flex: 1; }
+#recording-indicator .rec-label strong {
+  color: #fff;
+  font-weight: 700;
+  background: rgba(244, 114, 182, 0.3);
+  padding: 0 5px;
+  border-radius: 3px;
+}
+#recording-indicator .rec-timer {
+  font-family: "SF Mono", Menlo, monospace;
+  font-size: 11px;
+  color: var(--text);
+  background: rgba(14, 16, 22, 0.35);
+  padding: 1px 7px;
+  border-radius: 4px;
+}
+@keyframes indicator-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 #mic-btn.processing {
   background: var(--panel-2);

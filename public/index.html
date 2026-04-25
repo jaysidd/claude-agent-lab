@@ -85,7 +85,14 @@
           <div id="file-popover" class="hidden"></div>
           <div id="command-popover" class="hidden"></div>
         </div>
-        <button id="mic-btn" type="button" title="Record with WhisprDesk (configure in .env)" disabled>🎤</button>
+        <button id="mic-btn" type="button" title="Record with WhisprDesk (configure in Settings)" disabled>
+          <span id="mic-icon">🎤</span>
+        </button>
+        <div id="recording-indicator" class="hidden">
+          <span class="rec-dot"></span>
+          <span class="rec-label">Recording — click <strong>⏹</strong> to stop · then press <strong>Enter</strong> to send</span>
+          <span class="rec-timer">0:00</span>
+        </div>
         <button id="send" type="submit" disabled>Send</button>
       </form>
     </main>
