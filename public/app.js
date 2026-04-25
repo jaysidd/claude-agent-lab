@@ -486,6 +486,7 @@ async function sendMessage(text) {
     if (agentMsg.usage) bumpSessionTotals(agentId, agentMsg);
     renderMessages();
     renderSessionUsage();
+    refreshHistoryCount();
   }
 }
 
@@ -1157,6 +1158,9 @@ const SLASH_COMMANDS = [
   { cmd: "/think default", desc: "reset this agent to its configured model" },
   { cmd: "/plan on", desc: "enable plan mode — read-only agent run" },
   { cmd: "/plan off", desc: "disable plan mode" },
+  { cmd: "/export", desc: "download this conversation as Markdown" },
+  { cmd: "/export md", desc: "same as /export — Markdown download" },
+  { cmd: "/export json", desc: "download this conversation as JSON" },
 ];
 
 const commandPopover = document.getElementById("command-popover");
@@ -1262,6 +1266,7 @@ function handleSlashCommand(text) {
         "- `/think default` — reset to this agent's configured model",
         "- `/agents` — list all agents and their purpose",
         "- `/plan on|off` — toggle plan mode for this agent",
+        "- `/export` — download this chat as Markdown (`/export json` for JSON)",
         "- `/help` — this message",
         "",
         "**Keyboard shortcuts**",
@@ -1348,6 +1353,21 @@ function handleSlashCommand(text) {
     return true;
   }
 
+  if (cmd === "export") {
+    const fmt = (arg || "md").toLowerCase();
+    if (fmt !== "md" && fmt !== "markdown" && fmt !== "json") {
+      say("Use `/export` (Markdown) or `/export json`.");
+      return true;
+    }
+    const result = downloadCurrentConversation(fmt === "json" ? "json" : "md");
+    say(
+      result.ok
+        ? `Downloaded **${result.filename}** (${result.bytes} bytes).`
+        : `⚠️ ${result.error}`,
+    );
+    return true;
+  }
+
   if (cmd === "plan") {
     const on = arg.toLowerCase() === "on" || arg === "1" || arg === "true";
     const off = arg.toLowerCase() === "off" || arg === "0" || arg === "false";
@@ -1364,6 +1384,97 @@ function handleSlashCommand(text) {
 
   say(`⚠️ Unknown command \`/${cmd}\`. Try \`/help\`.`);
   return true;
+}
+
+function downloadBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+function safeFilename(s) {
+  return s.replace(/[^a-z0-9-_]+/gi, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "chat";
+}
+
+function downloadCurrentConversation(fmt) {
+  const agent = state.agents.find((a) => a.id === state.activeAgentId);
+  if (!agent) return { ok: false, error: "no active agent" };
+  const conv = state.conversations[agent.id] ?? [];
+  if (conv.length === 0) return { ok: false, error: "this conversation is empty" };
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const baseName = `${safeFilename(agent.name)}-${stamp}`;
+
+  if (fmt === "json") {
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        model: agent.model,
+      },
+      messages: conv,
+      sessionTotals: state.sessionTotals[agent.id] ?? null,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const filename = `${baseName}.json`;
+    downloadBlob(filename, blob);
+    return { ok: true, filename, bytes: blob.size };
+  }
+
+  // Markdown export
+  const lines = [];
+  lines.push(`# Chat with ${agent.emoji} ${agent.name}`);
+  lines.push(`*Exported ${new Date().toLocaleString()}*`);
+  const totals = state.sessionTotals[agent.id];
+  if (totals && totals.turns > 0) {
+    const tk = totals.inputTokens + totals.outputTokens;
+    const oauth = isOAuth(totals.apiKeySource);
+    lines.push(
+      oauth
+        ? `*${totals.turns} turn${totals.turns === 1 ? "" : "s"} · ${formatTokens(tk)} tokens · Max plan*`
+        : `*${totals.turns} turn${totals.turns === 1 ? "" : "s"} · ${formatTokens(tk)} tokens · ${formatCost(totals.costUsd)}*`,
+    );
+  }
+  lines.push("");
+  lines.push("---");
+  for (const m of conv) {
+    lines.push("");
+    if (m.role === "user") {
+      lines.push("**You:**");
+      lines.push("");
+      lines.push(m.text);
+    } else {
+      const modelTag = m.model ? prettyModel(m.model) : "agent";
+      const usageTag = m.usage
+        ? `, ${formatTokens(totalTokens(m.usage))} tk` +
+          (!isOAuth(m.apiKeySource) && typeof m.totalCostUsd === "number" && m.totalCostUsd > 0
+            ? ` · ${formatCost(m.totalCostUsd)}`
+            : "")
+        : "";
+      lines.push(`**${agent.name}** _(${modelTag}${usageTag})_:`);
+      lines.push("");
+      lines.push(m.text);
+      if (m.toolUses && m.toolUses.length) {
+        lines.push("");
+        lines.push("> Tools used: " + m.toolUses.map((t) => `\`${t.name}\``).join(", "));
+      }
+    }
+    lines.push("");
+    lines.push("---");
+  }
+  const md = lines.join("\n");
+  const blob = new Blob([md], { type: "text/markdown" });
+  const filename = `${baseName}.md`;
+  downloadBlob(filename, blob);
+  return { ok: true, filename, bytes: blob.size };
 }
 
 async function changeAgentModel(modelId) {
@@ -1600,6 +1711,210 @@ agentDeleteBtn.addEventListener("click", async () => {
     alert("Could not delete agent: " + err.message);
   }
 });
+
+// ----- Session history -----
+
+const historyBtn = document.getElementById("history-btn");
+const historyCount = document.getElementById("history-count");
+const historyModal = document.getElementById("history-modal");
+const historyCloseBtn = document.getElementById("history-close");
+const historyListEl = document.getElementById("history-list");
+
+historyBtn.addEventListener("click", openHistoryModal);
+historyCloseBtn.addEventListener("click", () => historyModal.classList.add("hidden"));
+historyModal.addEventListener("click", (e) => {
+  if (e.target === historyModal) historyModal.classList.add("hidden");
+});
+
+async function refreshHistoryCount() {
+  try {
+    const res = await fetch("/api/sessions");
+    const sessions = await res.json();
+    historyCount.textContent = sessions.length;
+  } catch {
+    historyCount.textContent = "0";
+  }
+}
+
+async function openHistoryModal() {
+  await renderHistoryList();
+  historyModal.classList.remove("hidden");
+}
+
+function relativeTime(ts) {
+  const diff = Date.now() - ts;
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
+
+async function renderHistoryList() {
+  historyListEl.innerHTML = "<div class='history-empty'>Loading…</div>";
+  let sessions;
+  try {
+    const res = await fetch("/api/sessions");
+    sessions = await res.json();
+  } catch (err) {
+    historyListEl.innerHTML = `<div class="history-empty">Failed to load: ${err.message}</div>`;
+    return;
+  }
+  historyCount.textContent = sessions.length;
+
+  if (sessions.length === 0) {
+    historyListEl.innerHTML =
+      "<div class='history-empty'>No conversations yet — send a message to start your first one.</div>";
+    return;
+  }
+
+  // Group by agent
+  const byAgent = {};
+  for (const s of sessions) {
+    if (!byAgent[s.agentId]) byAgent[s.agentId] = [];
+    byAgent[s.agentId].push(s);
+  }
+
+  historyListEl.innerHTML = "";
+  for (const agentId of Object.keys(byAgent)) {
+    const agent = state.agents.find((a) => a.id === agentId);
+    const group = document.createElement("div");
+    group.className = "history-agent-group";
+
+    const header = document.createElement("div");
+    header.className = "history-agent-header";
+    const emoji = document.createElement("span");
+    emoji.className = "agent-emoji";
+    emoji.textContent = agent?.emoji ?? "🤖";
+    const name = document.createElement("span");
+    name.className = "agent-name";
+    name.textContent = agent?.name ?? agentId;
+    const count = document.createElement("span");
+    count.className = "session-count";
+    count.textContent = byAgent[agentId].length;
+    header.append(emoji, name, count);
+    group.appendChild(header);
+
+    for (const s of byAgent[agentId]) {
+      group.appendChild(renderHistoryRow(s));
+    }
+
+    historyListEl.appendChild(group);
+  }
+}
+
+function renderHistoryRow(s) {
+  const row = document.createElement("div");
+  row.className = "history-row";
+  row.dataset.id = s.id;
+
+  const main = document.createElement("div");
+  main.className = "row-main";
+
+  const title = document.createElement("div");
+  title.className = "row-title";
+  title.textContent = s.title || "(untitled session)";
+  main.appendChild(title);
+
+  const meta = document.createElement("div");
+  meta.className = "row-meta";
+  const tokens = (s.totalInput ?? 0) + (s.totalOutput ?? 0);
+  const turns = Math.max(1, Math.floor(s.messageCount / 2));
+  meta.textContent = `${turns} turn${turns === 1 ? "" : "s"}  ·  ${formatTokens(tokens)} tk  ·  ${relativeTime(s.updatedAt)}`;
+  main.appendChild(meta);
+
+  const actions = document.createElement("div");
+  actions.className = "row-actions";
+
+  const renameBtn = document.createElement("button");
+  renameBtn.className = "row-action-btn";
+  renameBtn.title = "Rename";
+  renameBtn.textContent = "✎";
+  renameBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const next = prompt("New title:", s.title || "");
+    if (next === null || !next.trim()) return;
+    await fetch(`/api/sessions/${s.id}/title`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: next.trim() }),
+    });
+    await renderHistoryList();
+  });
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.className = "row-action-btn danger";
+  deleteBtn.title = "Delete";
+  deleteBtn.textContent = "✕";
+  deleteBtn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (!confirm(`Delete "${s.title || "this session"}"? This is permanent.`)) return;
+    await fetch(`/api/sessions/${s.id}`, { method: "DELETE" });
+    await renderHistoryList();
+  });
+
+  actions.append(renameBtn, deleteBtn);
+
+  row.append(main, actions);
+  row.addEventListener("click", () => restoreSession(s));
+  return row;
+}
+
+async function restoreSession(s) {
+  try {
+    const res = await fetch(`/api/sessions/${s.id}/restore`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+
+    // Switch to the right agent if needed
+    if (state.activeAgentId !== s.agentId) selectAgent(s.agentId);
+
+    // Replace the in-memory conversation with the restored messages
+    const conv = data.messages.map((m) => ({
+      role: m.role,
+      text: m.text,
+      toolUses: m.toolUses ?? [],
+      model: m.model,
+      apiKeySource: m.apiKeySource,
+      usage: m.usage,
+      totalCostUsd: m.totalCostUsd,
+      streaming: false,
+    }));
+    state.conversations[s.agentId] = conv;
+
+    // Rebuild session totals from the restored history
+    const totals = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationInputTokens: 0,
+      cacheReadInputTokens: 0,
+      costUsd: 0,
+      turns: 0,
+      apiKeySource: null,
+    };
+    for (const m of conv) {
+      if (m.role !== "agent" || !m.usage) continue;
+      totals.inputTokens += m.usage.input_tokens ?? 0;
+      totals.outputTokens += m.usage.output_tokens ?? 0;
+      totals.cacheCreationInputTokens += m.usage.cache_creation_input_tokens ?? 0;
+      totals.cacheReadInputTokens += m.usage.cache_read_input_tokens ?? 0;
+      totals.costUsd += m.totalCostUsd ?? 0;
+      totals.turns += 1;
+      totals.apiKeySource = m.apiKeySource ?? totals.apiKeySource;
+    }
+    state.sessionTotals[s.agentId] = totals;
+
+    historyModal.classList.add("hidden");
+    renderMessages();
+    renderSessionUsage();
+  } catch (err) {
+    alert("Could not restore session: " + err.message);
+  }
+}
 
 // ----- Settings -----
 
@@ -2131,4 +2446,5 @@ function attachSpeakButton(footerEl, text) {
   await refreshTasks();
   await refreshMemories();
   await refreshWhisprDeskStatus();
+  await refreshHistoryCount();
 })();

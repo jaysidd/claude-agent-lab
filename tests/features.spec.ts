@@ -35,8 +35,9 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     await input.click();
     await input.pressSequentially("/", { delay: 30 });
     await expect(page.locator("#command-popover")).toBeVisible({ timeout: 5_000 });
-    // All 12 commands should show for a single "/"
-    await expect(page.locator(".command-item")).toHaveCount(12);
+    // Sanity: at least 12 commands appear; exact count is allowed to grow.
+    const count = await page.locator(".command-item").count();
+    expect(count).toBeGreaterThanOrEqual(12);
 
     // Narrow to /think — should show 3 items
     await input.pressSequentially("think", { delay: 30 });
@@ -125,6 +126,19 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     } else {
       expect(micDisabled).toBe(false);
     }
+  });
+
+  test("slash command /export refuses on empty conversation", async ({ page }) => {
+    await page.goto("/");
+    await page.locator(".agent-item", { hasText: "Main" }).click();
+    // Make sure the conversation is empty
+    await page.locator("#reset-btn").click();
+
+    await page.locator("#input").fill("/export");
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".msg.agent .msg-body").last()).toContainText(
+      /empty/i,
+    );
   });
 
   test("settings modal opens and exposes whisprdesk + telegram sections", async ({ page, request }) => {

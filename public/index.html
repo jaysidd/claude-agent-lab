@@ -59,6 +59,9 @@
           <button id="settings-btn" type="button" title="Open settings">
             ⚙️ Settings
           </button>
+          <button id="history-btn" type="button" title="Past conversations">
+            📜 History <span id="history-count" class="tasks-count">0</span>
+          </button>
           <button id="memory-btn" type="button" title="Open persistent memory">
             🧠 Memory <span id="memory-count" class="tasks-count">0</span>
           </button>
@@ -178,6 +181,23 @@
           <button id="agent-cancel" type="button" class="btn-ghost">Cancel</button>
           <button id="agent-save" type="button" class="btn-primary">Save</button>
         </footer>
+      </div>
+    </div>
+
+    <div id="history-modal" class="modal-overlay hidden">
+      <div class="modal modal-wide">
+        <header class="modal-header">
+          <div class="modal-title">📜 Conversation History</div>
+          <button id="history-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="modal-intro">
+            Every conversation is recorded to local SQLite. Click any past session
+            to restore it — the SDK resumes from where you left off, your messages
+            reload into the chat, and replies continue the same thread.
+          </p>
+          <div id="history-list"></div>
+        </div>
       </div>
     </div>
 

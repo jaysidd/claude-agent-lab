@@ -59,6 +59,14 @@ import {
   configValue,
   SETTINGS_SCHEMA,
 } from "./settings.js";
+import {
+  appendTurn,
+  listSessions,
+  getSession,
+  getSessionMessages,
+  setSessionTitle,
+  deleteSession,
+} from "./sessions.js";
 
 type TaskPriority = "low" | "medium" | "high";
 type TaskStatus = "queued" | "active" | "done" | "error";
@@ -294,6 +302,26 @@ app.post("/api/chat", async (req, res) => {
 
   if (newSessionId) sessionByAgent.set(agent.id, newSessionId);
 
+  // Persist the turn so the session shows up in History
+  if (newSessionId && finalText) {
+    try {
+      appendTurn({
+        sessionId: newSessionId,
+        agentId: agent.id,
+        cwd: currentCwd,
+        userText: message,
+        agentText: finalText,
+        toolUses,
+        model: reportedModel ?? modelId,
+        apiKeySource,
+        usage,
+        totalCostUsd,
+      });
+    } catch (err) {
+      console.error("[sessions] appendTurn failed:", err);
+    }
+  }
+
   res.json({
     reply: finalText,
     toolUses,
@@ -345,6 +373,12 @@ app.post("/api/chat/stream", async (req, res) => {
   const subAgents = subAgentsFor(agent.id);
 
   let newSessionId: string | undefined;
+  let streamReportedModel: string | undefined;
+  let streamApiKeySource: string | undefined;
+  let streamUsage: any;
+  let streamCost: number | undefined;
+  const streamToolUses: Array<{ name: string; input: unknown }> = [];
+  let streamFinalText = "";
 
   try {
     for await (const msg of query({
@@ -366,11 +400,13 @@ app.post("/api/chat/stream", async (req, res) => {
 
       if (anyMsg.type === "system" && anyMsg.subtype === "init") {
         newSessionId = anyMsg.session_id ?? anyMsg.data?.session_id;
+        streamReportedModel = anyMsg.model ?? anyMsg.data?.model;
+        streamApiKeySource = anyMsg.apiKeySource ?? anyMsg.data?.apiKeySource;
         write({
           kind: "init",
           sessionId: newSessionId,
-          model: anyMsg.model ?? anyMsg.data?.model,
-          apiKeySource: anyMsg.apiKeySource ?? anyMsg.data?.apiKeySource,
+          model: streamReportedModel,
+          apiKeySource: streamApiKeySource,
         });
         continue;
       }
@@ -386,6 +422,7 @@ app.post("/api/chat/stream", async (req, res) => {
       if (anyMsg.type === "assistant" && Array.isArray(anyMsg.message?.content)) {
         for (const block of anyMsg.message.content) {
           if (block.type === "tool_use") {
+            streamToolUses.push({ name: block.name, input: block.input });
             write({ kind: "tool_use", name: block.name, input: block.input });
           }
         }
@@ -394,8 +431,11 @@ app.post("/api/chat/stream", async (req, res) => {
 
       if (anyMsg.type === "result") {
         if (typeof anyMsg.result === "string") {
+          streamFinalText = anyMsg.result;
           write({ kind: "result", text: anyMsg.result });
         }
+        streamUsage = anyMsg.usage;
+        streamCost = anyMsg.total_cost_usd;
         write({
           kind: "usage",
           usage: anyMsg.usage,
@@ -412,6 +452,27 @@ app.post("/api/chat/stream", async (req, res) => {
   }
 
   if (newSessionId && !clientClosed) sessionByAgent.set(agent.id, newSessionId);
+
+  // Persist the turn for History
+  if (newSessionId && streamFinalText && !clientClosed) {
+    try {
+      appendTurn({
+        sessionId: newSessionId,
+        agentId: agent.id,
+        cwd: currentCwd,
+        userText: message,
+        agentText: streamFinalText,
+        toolUses: streamToolUses,
+        model: streamReportedModel ?? modelId,
+        apiKeySource: streamApiKeySource,
+        usage: streamUsage,
+        totalCostUsd: streamCost,
+      });
+    } catch (err) {
+      console.error("[sessions] appendTurn (stream) failed:", err);
+    }
+  }
+
   write({ kind: "done" });
   if (!res.writableEnded) res.end();
 });
@@ -723,6 +784,52 @@ app.post("/api/settings", (req, res) => {
   res.json({ ok: true, changed });
 });
 
+
+// ----- Session history -----
+
+app.get("/api/sessions", (req, res) => {
+  const agentId = (req.query.agentId as string) || undefined;
+  res.json(listSessions(agentId));
+});
+
+app.get("/api/sessions/:id", (req, res) => {
+  const session = getSession(req.params.id);
+  if (!session) return res.status(404).json({ error: "not found" });
+  const messages = getSessionMessages(req.params.id);
+  res.json({ session, messages });
+});
+
+app.post("/api/sessions/:id/restore", (req, res) => {
+  const session = getSession(req.params.id);
+  if (!session) return res.status(404).json({ error: "not found" });
+  if (!findAgent(session.agentId)) {
+    return res.status(400).json({ error: "agent for this session no longer exists" });
+  }
+  // Hand the SDK-side session id back to the agent so future messages
+  // resume this conversation in place.
+  sessionByAgent.set(session.agentId, session.id);
+  const messages = getSessionMessages(req.params.id);
+  res.json({ session, messages });
+});
+
+app.post("/api/sessions/:id/title", (req, res) => {
+  const title = (req.body?.title ?? "").toString().trim();
+  if (!title) return res.status(400).json({ error: "title required" });
+  const ok = setSessionTitle(req.params.id, title);
+  if (!ok) return res.status(404).json({ error: "not found" });
+  res.json({ ok: true });
+});
+
+app.delete("/api/sessions/:id", (req, res) => {
+  const session = getSession(req.params.id);
+  if (!session) return res.status(404).json({ error: "not found" });
+  // If this is the active session for the agent, drop the resume pointer too
+  if (sessionByAgent.get(session.agentId) === session.id) {
+    sessionByAgent.delete(session.agentId);
+  }
+  deleteSession(req.params.id);
+  res.json({ ok: true });
+});
 
 // ----- Custom agents CRUD -----
 
