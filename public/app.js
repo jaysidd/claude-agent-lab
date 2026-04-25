@@ -1784,17 +1784,29 @@ micBtn.addEventListener("click", async () => {
 async function transcribeBlob(blob) {
   if (!blob.size) return;
   micBtn.classList.add("processing");
+  const sentCT = blob.type || "audio/webm";
+  console.log(`[mic] transcribing: ${blob.size} bytes, type=${sentCT}`);
   try {
     const res = await fetch("/api/whisprdesk/transcribe", {
       method: "POST",
-      headers: { "Content-Type": blob.type || "audio/webm" },
+      headers: { "Content-Type": sentCT },
       body: blob,
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || "transcription failed");
+    if (!res.ok) {
+      console.error("[mic] transcribe failed:", data);
+      const detail =
+        data.upstream?.error ??
+        data.upstream?.message ??
+        (data.upstream?.raw ? data.upstream.raw : JSON.stringify(data.upstream ?? {}));
+      throw new Error(`${data.error || "failed"}\n\n${detail}`);
+    }
     if (data.text) insertTextIntoComposer(data.text);
+    else console.warn("[mic] empty transcript:", data);
   } catch (err) {
-    alert("Transcription failed: " + err.message);
+    alert(
+      `Transcription failed:\n\n${err.message}\n\nCheck the browser console + server log for details (audio size, content-type, WhisprDesk's response).`,
+    );
   } finally {
     micBtn.classList.remove("processing");
   }

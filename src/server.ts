@@ -577,21 +577,47 @@ app.post(
     if (!token) return res.status(400).json({ error: "WhisprDesk token not set" });
     const audio = req.body as Buffer;
     if (!audio || !audio.length) return res.status(400).json({ error: "empty body" });
+
+    const contentType = (req.headers["content-type"] as string) ?? "audio/webm";
+    console.log(
+      `[whisprdesk] transcribe: ${audio.length} bytes, content-type=${contentType}`,
+    );
+
     try {
       const upstream = await fetch(`${url}/v1/transcribe`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
-          "Content-Type": (req.headers["content-type"] as string) ?? "audio/webm",
+          "Content-Type": contentType,
         },
         body: new Uint8Array(audio),
       });
+      const upstreamCT = upstream.headers.get("content-type") ?? "application/json";
       const text = await upstream.text();
-      res
-        .status(upstream.status)
-        .type(upstream.headers.get("content-type") ?? "application/json")
-        .send(text);
+
+      if (!upstream.ok) {
+        console.error(
+          `[whisprdesk] upstream ${upstream.status} (${upstreamCT}): ${text.slice(0, 500)}`,
+        );
+        // Surface the real upstream error to the browser so alerts are useful
+        let upstreamError: any;
+        try {
+          upstreamError = JSON.parse(text);
+        } catch {
+          upstreamError = { raw: text.slice(0, 500) };
+        }
+        return res.status(502).json({
+          error: `WhisprDesk rejected the audio (HTTP ${upstream.status})`,
+          upstream: upstreamError,
+          sentBytes: audio.length,
+          sentContentType: contentType,
+        });
+      }
+
+      console.log(`[whisprdesk] transcribe OK (${audio.length} bytes)`);
+      res.status(upstream.status).type(upstreamCT).send(text);
     } catch (err: any) {
+      console.error("[whisprdesk] proxy fetch failed:", err);
       res.status(502).json({ error: err?.message ?? "upstream failed" });
     }
   },
