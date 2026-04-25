@@ -1,4 +1,4 @@
-# Command Center — a Claude Agent SDK learning lab
+# Command Center, a Claude Agent SDK learning lab
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
