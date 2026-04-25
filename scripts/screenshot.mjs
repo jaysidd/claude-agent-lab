@@ -139,6 +139,34 @@ await wait(400);
 await snap("11-slash-popover");
 await page.locator("#input").fill("");
 
+// 13. History modal — seed a few sessions across agents so the modal isn't bare
+const seedConvos = [
+  { agentId: "main", message: "Help me plan a YouTube video about AI agents" },
+  { agentId: "comms", message: "Draft a thank-you email to a client" },
+  { agentId: "content", message: "Brainstorm 3 short video titles about TypeScript" },
+];
+for (const c of seedConvos) {
+  console.log(`seeding history: ${c.agentId} ← "${c.message.slice(0, 30)}…"`);
+  await fetch("http://localhost:3333/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(c),
+  });
+}
+await page.reload();
+await page.waitForSelector(".agent-item");
+await wait(400);
+await page.locator("#history-btn").click();
+await page.waitForSelector("#history-modal:not(.hidden)");
+await wait(400);
+await snap("13-history-modal");
+
+// 14. Restore a session → active chat with the usage chip + per-message footer
+await page.locator(".history-row").first().click();
+await page.waitForSelector(".msg.agent .msg-footer .usage-chip", { timeout: 15_000 });
+await wait(400);
+await snap("14-chat-with-usage");
+
 // 12. New agent editor — partially filled so reader sees the form
 await page.locator("#new-agent-btn").click();
 await page.waitForSelector("#agent-modal:not(.hidden)");

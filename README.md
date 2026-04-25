@@ -3,11 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-21_passing-6ee7b7)](./tests)
+[![Tests](https://img.shields.io/badge/tests-22_passing-6ee7b7)](./tests)
 
-A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. Task board with Haiku-powered auto-routing. Token-by-token streaming. Folder scoping. `@file` and `/command` autocomplete. Persistent SQLite memory. Settings UI for integrations. Voice I/O via [WhisprDesk](https://whisprdesk.com/).
+A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. Task board with Haiku-powered auto-routing. Token-by-token streaming. Folder scoping. `@file` and `/command` autocomplete. Persistent SQLite memory. **Conversation history with restore-and-resume.** OAuth-aware **cost & token tracking.** Markdown / JSON conversation export. Settings UI for integrations. Voice I/O via [WhisprDesk](https://whisprdesk.com/).
 
-All in ~2,200 lines of hand-written code — because most of the work is already inside the SDK.
+All in ~2,500 lines of hand-written code — because most of the work is already inside the SDK.
 
 ![Command Center — overview](docs/screenshots/01-overview.png)
 
@@ -40,6 +40,9 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Task queue with auto-routing](#task-queue-with-auto-routing) | One-shot Haiku `query()` as a classifier |
 | [Markdown rendering](#markdown-rendering) | Not SDK — `marked` + `DOMPurify` + `highlight.js` on completed replies |
 | [Persistent memory (SQLite)](#persistent-memory-sqlite) | Injected into `systemPrompt` on every call |
+| [Session history + restore](#session-history--restore) | Every conversation persisted to SQLite; click to resume any past session |
+| [Cost & token tracking](#cost--token-tracking) | Per-message + per-session totals, OAuth-aware (no fake $ for Max users) |
+| [Conversation export](#conversation-export) | `/export` slash command — Markdown or JSON download |
 | [Settings panel](#settings-panel) | DB-backed config with env-var fallback |
 | [Slash commands + autocomplete](#slash-commands) | Client-side interception + live popover |
 | [Plan mode toggle](#plan-mode-toggle) | `permissionMode: 'plan'` |
@@ -180,6 +183,54 @@ Context:
 
 ---
 
+### Session history + restore
+
+![Conversation history modal](docs/screenshots/13-history-modal.png)
+
+Every conversation is recorded to local SQLite as it happens — `sessions` and `session_messages` tables with full `usage` objects, model info, and tool-use traces. The 📜 **History** button in the chat header opens a modal listing all past sessions, grouped by agent, with auto-titles (taken from your first user message), turn counts, total tokens, and relative timestamps.
+
+**Click any session to restore it.** The SDK's `resume:` re-attaches to that session id, your messages reload into the chat, and your next reply continues the same thread — agent memory and all. Hover any row to rename (✎) or delete (✕).
+
+```
+sessions(id, agent_id, title, message_count, total_input,
+         total_output, total_cost_usd, cwd, created_at, updated_at)
+session_messages(id, session_id, role, text, tool_uses, model,
+                 api_key_source, usage, total_cost_usd, created_at)
+```
+
+History is per-machine (the SQLite db lives at `data/lab.db`, gitignored). Nothing leaves your laptop.
+
+---
+
+### Cost & token tracking
+
+![Restored chat with usage chip + per-message footer](docs/screenshots/14-chat-with-usage.png)
+
+The SDK's `ResultMessage` carries `usage` and `total_cost_usd` for every reply. We display:
+
+- **Per-message footer**: `📊 850 tk` (always) plus `· $0.0042` (only when an API key is paying — `apiKeySource` is `user`/`org`/`project`)
+- **Session-totals chip in the header**: `12.4K tk · 18 turns` plus `· $0.0731` (same OAuth-aware rule)
+
+**Why no $ for Max-plan / OAuth users:** the Max plan is flat-rate, not per-token. Showing the SDK-calculated dollar number would imply per-message billing that doesn't apply. Tokens still matter as a proxy for "how heavily am I using my plan?" — those stay visible to everyone. Hover the chip for an in / out / cache breakdown.
+
+When you flip to API-key auth (or sell a derivative product where users supply their own key), the cost column lights up automatically — the UI keys off `apiKeySource`, no config flag needed.
+
+---
+
+### Conversation export
+
+```
+/export          → Markdown download, agent name + ISO timestamp
+/export md       → same
+/export json     → JSON download with full usage objects intact
+```
+
+Implemented entirely client-side from the existing chat state — no server round-trip. The Markdown variant is publish-friendly: agent emoji header, exported-at timestamp, session totals chip, "**You:** …" / "**Agent** _(model · tokens)_:" pattern, tool-use citations as blockquotes. JSON keeps the raw `usage` objects intact so the export can feed downstream analysis.
+
+Filename pattern: `{agent-name-slug}-{ISO-stamp}.{md|json}`.
+
+---
+
 ### Slash commands
 
 ![Slash command autocomplete popover](docs/screenshots/11-slash-popover.png)
@@ -197,6 +248,8 @@ Type `/` and a **live autocomplete popover** appears above the composer — same
 | `/think fast` | Alias: switch to Haiku 4.5 (snappy, cheap) |
 | `/think default` | Reset to the agent's configured default |
 | `/plan on\|off` | Toggle plan mode for this agent |
+| `/export` | Download this chat as Markdown |
+| `/export json` | Download as JSON with full usage objects |
 
 Output renders as a system-origin message in the chat log with full markdown formatting.
 
@@ -589,6 +642,11 @@ flowchart LR
 | `/api/whisprdesk/capabilities` | GET | — | WhisprDesk's `/v1/capabilities` proxied |
 | `/api/whisprdesk/transcribe` | POST | raw audio body (≤30 MB) | `{text, provider, model, durationMs}` |
 | `/api/whisprdesk/events` | GET | — | SSE passthrough from WhisprDesk |
+| `/api/sessions` | GET | `?agentId=` | `Array<Session>` — past conversations |
+| `/api/sessions/:id` | GET | — | `{session, messages}` |
+| `/api/sessions/:id/restore` | POST | — | Sets server-side session for that agent + returns messages |
+| `/api/sessions/:id/title` | POST | `{title}` | Rename |
+| `/api/sessions/:id` | DELETE | — | `{ok}` (cascade-deletes messages) |
 
 ---
 
