@@ -229,7 +229,7 @@ If you have [**WhisprDesk**](https://whisprdesk.com/) running locally, Command C
 
 ![Command Center overview showing the WhisprDesk status indicator](docs/screenshots/01-overview.png)
 
-**Active mode (mic button or `⌘⇧M`):** A 🎤 button next to Send — or the keyboard shortcut **`⌘⇧M`** — records audio via `MediaRecorder`. Click again / press `⌘⇧M` again to stop. The blob POSTs to `/api/whisprdesk/transcribe` (server-side proxy that adds the Bearer header) and the transcript drops into the composer, ready to edit or send with `Enter`. A live pink banner above the composer shows the elapsed recording time and the exact stop instruction.
+**Active mode (mic button or `⌥V`):** A 🎤 button next to Send — or the keyboard shortcut **`⌥V`** (Option+V on macOS, Alt+V elsewhere) — records audio via `MediaRecorder`. Click again / press `⌥V` again to stop. The WebM/Opus audio is decoded in the browser via the Web Audio API, re-encoded as mono 16-bit PCM WAV (so server-side ffmpeg decoders always succeed on the output regardless of MediaRecorder quirks), then POSTs to `/api/whisprdesk/transcribe`. Server adds the Bearer header; transcript drops into the composer, ready to edit or send with `Enter`. A live pink banner above the composer shows the elapsed recording time and the stop instruction.
 
 **Passive mode (SSE listener):** The server subscribes to WhisprDesk's `/v1/events` stream. Any dictation you do *anywhere* on your Mac via WhisprDesk's native push-to-talk shortcut — as long as Command Center is the focused tab — auto-fills the composer. You keep the muscle memory; the lab just steals the transcript.
 

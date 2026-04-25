@@ -1152,7 +1152,7 @@ function handleSlashCommand(text) {
         "- `/help` — this message",
         "",
         "**Keyboard shortcuts**",
-        "- `⌘⇧M` — start / stop WhisprDesk recording (when the tab is focused)",
+        "- `⌥V` — start / stop WhisprDesk recording (when the tab is focused). `Alt+V` on Windows/Linux.",
         "- `Enter` — send message",
         "- `Shift+Enter` — newline in the composer",
         "- `@` — file autocomplete for the current folder",
@@ -1739,7 +1739,7 @@ async function refreshWhisprDeskStatus() {
       whisprdeskDot.className = "status-dot";
       whisprdeskLabel.textContent = "WhisprDesk · ready";
       micBtn.disabled = false;
-      micBtn.title = "Click (or ⌘⇧M) to record — click again to stop, then Enter to send";
+      micBtn.title = "Click (or ⌥V) to record — click again to stop, then Enter to send";
       subscribeToWhisprDeskEvents();
     } else {
       whisprdeskDot.className = "status-dot status-dot-warn";
@@ -1754,19 +1754,21 @@ async function refreshWhisprDeskStatus() {
   }
 }
 
-// Global keyboard shortcut: Cmd+Shift+M (macOS) or Ctrl+Shift+M (other)
-// toggles recording. Skipped while a modal is open, or when a text field
-// besides the chat composer has focus (so the user can still type M in
-// settings fields).
+// Global keyboard shortcut: Option+V (macOS) or Alt+V (other) toggles recording.
+// Avoids ⌘⇧M which collides with Chrome's user-switcher menu on macOS; avoids
+// ⌘M entirely (system-level "minimize window"). Option+V is unclaimed on all
+// major browsers + both desktop OSes.
 document.addEventListener("keydown", (e) => {
-  const isMetaShiftM =
-    (e.metaKey || e.ctrlKey) && e.shiftKey && (e.code === "KeyM" || e.key === "M" || e.key === "m");
-  if (!isMetaShiftM) return;
+  const isOptionV = e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && e.code === "KeyV";
+  if (!isOptionV) return;
   if (micBtn.disabled) return;
   // Don't trigger if a modal is open — user is probably configuring
   const anyModalOpen = document.querySelector(".modal-overlay:not(.hidden)");
   if (anyModalOpen) return;
-  // Don't trigger inside unrelated text inputs (settings modal inputs, etc.)
+  // Don't trigger inside unrelated text inputs (settings fields, agent editor,
+  // memory panel, etc.) so users can still type the letter V. The chat
+  // composer textarea is explicitly OK because that's where the transcript
+  // lands anyway.
   const ae = document.activeElement;
   if (
     ae &&
@@ -1818,13 +1820,31 @@ micBtn.addEventListener("click", async () => {
 async function transcribeBlob(blob) {
   if (!blob.size) return;
   micBtn.classList.add("processing");
-  const sentCT = blob.type || "audio/webm";
-  console.log(`[mic] transcribing: ${blob.size} bytes, type=${sentCT}`);
+  console.log(`[mic] captured: ${blob.size} bytes, type=${blob.type || "audio/webm"}`);
+
+  // Convert MediaRecorder output (WebM/Opus on Chrome) to mono 16-bit PCM WAV
+  // in the browser before sending. Browsers reliably decode their own
+  // MediaRecorder output; server-side ffmpeg sometimes chokes on the streaming
+  // EBML header Chrome emits. WAV is trivial to decode anywhere.
+  let wavBlob;
+  try {
+    wavBlob = await webmBlobToWav(blob);
+  } catch (err) {
+    console.error("[mic] WAV conversion failed:", err);
+    alert(
+      `Couldn't prepare the audio:\n\n${err.message}\n\n` +
+        "Try recording again. If this keeps happening, check the browser console.",
+    );
+    micBtn.classList.remove("processing");
+    return;
+  }
+  console.log(`[mic] converted to WAV: ${wavBlob.size} bytes`);
+
   try {
     const res = await fetch("/api/whisprdesk/transcribe", {
       method: "POST",
-      headers: { "Content-Type": sentCT },
-      body: blob,
+      headers: { "Content-Type": "audio/wav" },
+      body: wavBlob,
     });
     const data = await res.json();
     if (!res.ok) {
@@ -1839,11 +1859,85 @@ async function transcribeBlob(blob) {
     else console.warn("[mic] empty transcript:", data);
   } catch (err) {
     alert(
-      `Transcription failed:\n\n${err.message}\n\nCheck the browser console + server log for details (audio size, content-type, WhisprDesk's response).`,
+      `Transcription failed:\n\n${err.message}\n\nCheck the browser console + server log for details.`,
     );
   } finally {
     micBtn.classList.remove("processing");
   }
+}
+
+// Browser-side WAV encoder. Decodes the MediaRecorder output with the same
+// codec the browser used to record it, then writes a PCM RIFF/WAVE file.
+// Mono, 16-bit, source sample rate (usually 48 kHz on Chrome).
+async function webmBlobToWav(blob) {
+  const arrayBuffer = await blob.arrayBuffer();
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) throw new Error("Web Audio API not available in this browser");
+  const audioCtx = new AudioCtx();
+  let audioBuffer;
+  try {
+    audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  } finally {
+    // Free resources even on error
+    if (typeof audioCtx.close === "function") audioCtx.close();
+  }
+  return audioBufferToWavBlob(audioBuffer);
+}
+
+function audioBufferToWavBlob(audioBuffer) {
+  const numChannels = 1; // mix to mono — Whisper doesn't need stereo and it halves the size
+  const sampleRate = audioBuffer.sampleRate;
+  const bitDepth = 16;
+  const bytesPerSample = bitDepth / 8;
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+
+  // Mix all channels to mono by averaging
+  const sourceLength = audioBuffer.length;
+  const monoSamples = new Float32Array(sourceLength);
+  for (let ch = 0; ch < audioBuffer.numberOfChannels; ch++) {
+    const data = audioBuffer.getChannelData(ch);
+    for (let i = 0; i < sourceLength; i++) monoSamples[i] += data[i];
+  }
+  if (audioBuffer.numberOfChannels > 1) {
+    for (let i = 0; i < sourceLength; i++) monoSamples[i] /= audioBuffer.numberOfChannels;
+  }
+
+  const dataSize = sourceLength * blockAlign;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  const writeString = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  // RIFF header
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, "WAVE");
+  // fmt chunk
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM fmt chunk size
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitDepth, true);
+  // data chunk
+  writeString(36, "data");
+  view.setUint32(40, dataSize, true);
+
+  // PCM samples: float32 [-1, 1] → int16 LE
+  let offset = 44;
+  for (let i = 0; i < sourceLength; i++) {
+    const clamped = Math.max(-1, Math.min(1, monoSamples[i]));
+    const int16 = clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
+    view.setInt16(offset, int16, true);
+    offset += 2;
+  }
+
+  return new Blob([buffer], { type: "audio/wav" });
 }
 
 function insertTextIntoComposer(text) {

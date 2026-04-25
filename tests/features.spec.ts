@@ -108,13 +108,19 @@ test.describe("Command Center — new features smoke (no engine)", () => {
   });
 
   test("mic button reflects whisprdesk availability", async ({ page }) => {
+    // Wait for the initial status probe so label + disabled state are
+    // guaranteed consistent before we assert on them.
+    const statusPromise = page.waitForResponse((r) =>
+      r.url().includes("/api/whisprdesk/status"),
+    );
     await page.goto("/");
-    const mic = page.locator("#mic-btn");
-    // Either disabled (not configured or unreachable) or enabled (live);
-    // the label must match.
-    const label = await page.locator("#whisprdesk-label").textContent();
-    const micDisabled = await mic.isDisabled();
-    if (/off|unreachable|error/i.test(label ?? "")) {
+    await statusPromise;
+    // Give the app.js handler one tick to apply the DOM updates
+    await page.waitForTimeout(50);
+
+    const label = (await page.locator("#whisprdesk-label").textContent()) ?? "";
+    const micDisabled = await page.locator("#mic-btn").isDisabled();
+    if (/off|unreachable|error/i.test(label)) {
       expect(micDisabled).toBe(true);
     } else {
       expect(micDisabled).toBe(false);
