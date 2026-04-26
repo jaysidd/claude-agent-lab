@@ -4,7 +4,6 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { AGENTS, MODELS } from "./agents.js";
 import {
@@ -67,21 +66,82 @@ import {
   setSessionTitle,
   deleteSession,
 } from "./sessions.js";
+import { db } from "./memory.js";
+import { taskQueue, WORKER_ID } from "./taskQueueInstance.js";
+import type { Task as QueueTask } from "./taskQueue.js";
 
 type TaskPriority = "low" | "medium" | "high";
-type TaskStatus = "queued" | "active" | "done" | "error";
-type Task = {
+type ApiTaskStatus = "queued" | "active" | "done" | "error";
+
+// Wire-format task shape returned to the frontend. Stable contract — UI
+// classnames and conditional rendering depend on these field names and
+// status strings.
+type ApiTask = {
   id: string;
   description: string;
   priority: TaskPriority;
   assignedAgent: string;
-  status: TaskStatus;
+  status: ApiTaskStatus;
   createdAt: number;
   startedAt?: number;
   completedAt?: number;
   result?: string;
   error?: string;
 };
+
+const PRIORITY_TO_NUM: Record<TaskPriority, number> = {
+  low: 0,
+  medium: 5,
+  high: 10,
+};
+
+function priorityFromNum(n: number): TaskPriority {
+  if (n >= 10) return "high";
+  if (n >= 5) return "medium";
+  return "low";
+}
+
+function statusFromQueue(s: QueueTask["status"]): ApiTaskStatus {
+  if (s === "checked_out") return "active";
+  if (s === "failed" || s === "cancelled") return "error";
+  return s; // queued, done
+}
+
+function toApiTask(t: QueueTask): ApiTask {
+  const errMsg =
+    t.error && typeof t.error === "object" && "message" in t.error
+      ? String(t.error.message)
+      : undefined;
+  return {
+    id: t.id,
+    description: t.description,
+    priority: priorityFromNum(t.priority),
+    assignedAgent: t.agentId,
+    status: statusFromQueue(t.status),
+    createdAt: t.createdAt,
+    startedAt: (t.metadata?.startedAt as number | undefined) ?? undefined,
+    completedAt: (t.metadata?.completedAt as number | undefined) ?? undefined,
+    result: typeof t.result === "string" ? t.result : undefined,
+    error: errMsg,
+  };
+}
+
+const TASK_RETENTION_CAP = 50;
+
+function pruneCompletedTasks(cap = TASK_RETENTION_CAP) {
+  // Hard-delete oldest terminal rows beyond the cap. Keeps the queue file
+  // bounded for personal-scale use. Host policy — not part of TaskQueue.
+  db.prepare(
+    `DELETE FROM tasks
+       WHERE status IN ('done', 'failed', 'cancelled')
+         AND id NOT IN (
+           SELECT id FROM tasks
+            WHERE status IN ('done', 'failed', 'cancelled')
+            ORDER BY updated_at DESC
+            LIMIT ?
+         )`,
+  ).run(cap);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
@@ -93,7 +153,6 @@ app.use(express.static(PUBLIC_DIR));
 const sessionByAgent = new Map<string, string>();
 const modelOverride = new Map<string, string>();
 const planMode = new Map<string, boolean>();
-const tasks = new Map<string, Task>();
 let currentCwd = os.homedir();
 
 async function classifyTask(description: string): Promise<string> {
@@ -528,7 +587,9 @@ app.post("/api/plan/:agentId", (req, res) => {
 });
 
 app.get("/api/tasks", (_req, res) => {
-  res.json(Array.from(tasks.values()).sort((a, b) => b.createdAt - a.createdAt));
+  const all = taskQueue.list();
+  const sorted = [...all].sort((a, b) => b.createdAt - a.createdAt);
+  res.json(sorted.map(toApiTask));
 });
 
 app.post("/api/task", async (req, res) => {
@@ -547,50 +608,47 @@ app.post("/api/task", async (req, res) => {
   const assignedAgent =
     agentOverride && findAgent(agentOverride) ? agentOverride : await classifyTask(description);
 
-  const task: Task = {
-    id: randomUUID(),
+  const task = taskQueue.enqueue({
     description,
-    priority,
-    assignedAgent,
-    status: "queued",
-    createdAt: Date.now(),
-  };
-  tasks.set(task.id, task);
+    agentId: assignedAgent,
+    priority: PRIORITY_TO_NUM[priority],
+  });
   pruneCompletedTasks();
-  res.json(task);
+  res.json(toApiTask(task));
 });
 
-function pruneCompletedTasks(cap = 50) {
-  const completed = Array.from(tasks.values())
-    .filter((t) => t.status === "done" || t.status === "error")
-    .sort((a, b) => (a.completedAt ?? 0) - (b.completedAt ?? 0));
-  const excess = completed.length - cap;
-  for (let i = 0; i < excess; i++) tasks.delete(completed[i].id);
-}
-
 app.post("/api/task/:id/run", async (req, res) => {
-  const task = tasks.get(req.params.id);
-  if (!task) return res.status(404).json({ error: "task not found" });
-  if (task.status !== "queued") {
-    return res.status(400).json({ error: "task already " + task.status });
+  const taskId = req.params.id;
+  const existing = taskQueue.get(taskId);
+  if (!existing) return res.status(404).json({ error: "task not found" });
+  if (existing.status !== "queued") {
+    return res.status(400).json({ error: "task already " + statusFromQueue(existing.status) });
   }
 
-  const agent = findAgent(task.assignedAgent);
+  const agent = findAgent(existing.agentId);
   if (!agent) {
-    task.status = "error";
-    task.error = "assigned agent no longer exists";
-    return res.json(task);
+    taskQueue.cancel(taskId, "assigned agent no longer exists");
+    const cancelled = taskQueue.get(taskId);
+    return res.json(cancelled ? toApiTask(cancelled) : null);
   }
 
-  task.status = "active";
-  task.startedAt = Date.now();
+  const checked = taskQueue.checkoutById(taskId, WORKER_ID);
+  if (!checked) {
+    // Lost the race to another caller; reflect current state to the client.
+    const fresh = taskQueue.get(taskId);
+    return res.status(409).json(fresh ? toApiTask(fresh) : { error: "task not available" });
+  }
+
+  // Stash startedAt as metadata for UI display. The queue itself uses
+  // updated_at; metadata just preserves the C03 wire-format field.
+  const startedAt = Date.now();
 
   let finalText = "";
   const subAgents = subAgentsFor(agent.id);
   const plan = planMode.get(agent.id) === true;
   try {
     for await (const msg of query({
-      prompt: task.description,
+      prompt: checked.description,
       options: {
         allowedTools: agent.allowedTools,
         systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
@@ -605,20 +663,30 @@ app.post("/api/task/:id/run", async (req, res) => {
         finalText = anyMsg.result;
       }
     }
-    task.status = "done";
-    task.completedAt = Date.now();
-    task.result = finalText;
+    taskQueue.complete(taskId, WORKER_ID, finalText);
   } catch (err: any) {
-    task.status = "error";
-    task.error = err?.message ?? "agent failed";
-    task.completedAt = Date.now();
+    taskQueue.fail(taskId, WORKER_ID, {
+      message: err?.message ?? "agent failed",
+    });
   }
 
-  res.json(task);
+  // Patch UI-only timestamps onto the row so the wire format keeps the
+  // C03 fields without polluting the queue's core schema.
+  const completedAt = Date.now();
+  db.prepare(
+    `UPDATE tasks
+        SET metadata_json = json(?)
+      WHERE id = ?`,
+  ).run(JSON.stringify({ startedAt, completedAt }), taskId);
+
+  const final = taskQueue.get(taskId);
+  res.json(final ? toApiTask(final) : null);
 });
 
 app.delete("/api/task/:id", (req, res) => {
-  tasks.delete(req.params.id);
+  // Hard-delete by id. Host policy — TaskQueue does not expose a delete
+  // because retention belongs to the host. Direct SQL on the locked schema.
+  db.prepare("DELETE FROM tasks WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
 });
 
