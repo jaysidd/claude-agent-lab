@@ -1,7 +1,7 @@
 # Command Center — Sequential Backlog
 
-> Last Updated: 2026-04-25 (Package A shipped; GitHub Pages live; Clawless cross-promo)
-> Total items: 18+ (7 foundation + 14 planned features shipped + future list)
+> Last Updated: 2026-04-26 (C16 epic added — Phase 2: Autonomous Operations)
+> Total items: 19+ (7 foundation + 14 shipped + 1 active epic + future list)
 > Completed: F1–F7 + C01 + C02 + C03 + C06 + C08 + C09 + C10 + C11 + C13 + C14 + C15 + A1 + A2 + A3
 > C12 was partial then reverted — flag pulled in the audit sweep, follow-up tracked
 > Public surface: github.com/jaysidd/claude-agent-lab + jaysidd.github.io/claude-agent-lab/
@@ -218,6 +218,121 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 
 ---
 
+## Phase 2: Autonomous Operations
+
+### C16 — Autonomous Agent Firm (scheduler · durable tasks · budgets · approvals)
+
+- [ ] **Status**: Not started. Designed 2026-04-26 after evaluating Paperclip's [zero-human trading firm demo](https://www.youtube.com/watch?v=cXhEw2jF4go) and [paperclipai/paperclip](https://github.com/paperclipai/paperclip). Cross-checked with Clawless agent same day — see "Clawless cross-pollination" section below before implementing.
+- **Priority**: MEDIUM-HIGH. Unlocks the whole "agents that run while you sleep" pattern that Paperclip is selling — but built directly on the Agent SDK with no Paperclip dependency.
+- **Effort**: Large epic — split into four phased sub-features, each ~1 session. Total ~4–6 sessions.
+- **Reference memory**: `memory/project_paperclip_comparison.md` (positioning vs Paperclip), `memory/project_clawless_c16_alignment.md` (Clawless lane split + cross-pollination decisions).
+
+#### Goal
+
+Take Command Center from "interactive lab" to "lab + small autonomous runtime." Make it possible to run a Paperclip-style agent firm (CEO + specialists, delegating via task comments, waking on schedule) directly on the SDK with the existing Max OAuth — without rebuilding Paperclip's whole platform.
+
+#### Scope guard — what this is NOT
+
+- **Not multi-provider.** Stays Claude-only. Cross-runtime adapters (Codex/Cursor/OpenClaw) belong in Clawless.
+- **Not commercial.** Personal-use Max OAuth model is preserved. Commercial / hosted multi-tenant is explicitly out of scope; would require user-supplied API keys and lives in Clawless.
+- **Not a Paperclip clone.** No org chart primitives, no governance audit, no workspace isolation via git worktrees. Those are Paperclip's lane.
+
+#### Constraints baked into the design
+
+These aren't blockers — they're shape constraints that should inform every sub-feature:
+
+1. **Max plan rate limits.** 5-hour usage windows. Budget enforcement (C16c) must front-run rate exhaustion, not just track tokens after-the-fact, or the firm will stall mid-cycle.
+2. **Fair-use posture.** Personal-scale only. Don't demo this as a 24/7 hedge fund. Keep schedules conservative (think "hourly," not "every 30 seconds").
+3. **Permission bypass risk.** Headless agents need `permissionMode: 'bypassPermissions'` (SDK equivalent of Paperclip's `dangerouslySkipPermissions`). That removes the safety net for tool use. Approval gates (C16d) are how the safety net comes back for high-stakes steps.
+4. **OAuth session lifetime.** Tokens rotate. The scheduler (C16a) needs a session healthcheck so the firm doesn't silently die at 3 AM after a token rotation.
+
+#### Phased sub-features
+
+##### C16a — Scheduler / cron-style agent triggers
+
+- **What**: A persistent scheduler that wakes a chosen agent on a cron expression, with a prompt template, against a chosen cwd. UI: "Schedule" tab listing schedules; CRUD via `/api/schedules`.
+- **SDK angle**: each fire is a normal `query()` call. The novelty is durability + timing, not the agent loop itself.
+- **Clawless status**: shipped as B06 (Cron panel — friendly presets + raw cron, SQLite-durable, multiple result destinations, 31 tests). No collision. Different runtime (theirs routes through OpenClaw session API; ours hits the Agent SDK directly), so we build our own — but **steal liberally from B06's UX**: cron-expression presets, the multi-destination result routing pattern, the test shape. Healthcheck loop for OAuth-rotation is novel on our side and may flow back as a B06 refinement.
+- **Files**: `src/scheduler.ts` (new — uses `node-cron` or a simple `setInterval` loop with persisted next-fire-at timestamps), `src/server.ts` (new routes), `data/lab.db` (schedules table), `public/schedules.html` or modal.
+- **Acceptance**: schedule survives server restart · fires at the correct time · result lands in session history (A2) and task queue (C03) · can be paused/deleted from UI · OAuth-dead detection logged + scheduler self-pauses instead of looping errors.
+
+##### C16b — Durable task queue (promote C03 to SQLite)
+
+- **What**: C03's in-memory `Map<taskId, Task>` moves to SQLite at `data/lab.db`. Tasks survive restart. Add atomic `checkout` semantics so a scheduled fire can't grab a task another worker already started.
+- **Why now**: a scheduler firing into a volatile queue is fragile. Durability is the prerequisite for trusting overnight runs.
+- **Clawless status**: greenfield on their side. B54 was filed as in-memory FIFO with zero SQLite design — they're not iterating from a counter-sketch, they're adopting **whatever we send mechanically**. That makes our schema the source of truth across both projects, and removes the "wait for their input" delay. Their existing storage stack (better-sqlite3 with WAL) gives concurrent reads + single writer but no checkout primitive, so we design the transactional shape from scratch. Don't underbuild assuming they have something they don't.
+- **Files**: `src/db.ts` (tasks table + transactions), `src/taskQueue.ts` (new — extract the atomic-checkout primitive into a standalone module from day one, not later, so the lift is mechanical), `src/server.ts` (refactor task routes), `public/app.js` (no UI change — same kanban, persistent backing).
+- **Acceptance**: tasks survive restart with status preserved · two concurrent fires for the same task → exactly one runs (other gets a 409-style "already checked out") · existing kanban UI unchanged · all C03 acceptance criteria still pass · `taskQueue.ts` has zero Command-Center-specific imports (no Express, no SDK references) so it's a pure data-layer module.
+
+##### C16c — Budget enforcement (extend A1 from tracking to capping)
+
+- **What**: A1 already tracks per-message tokens and session totals. Add per-agent monthly token + cost caps (config in Settings modal C14). When an agent's window-to-date usage exceeds the cap, `/api/chat[/stream]` and scheduled fires return a structured "budget exhausted" response **before** the SDK call.
+- **Special case**: Max OAuth has no $ cost — cap on tokens or on number-of-fires-per-window instead. API-key mode (if ever enabled) caps on $.
+- **Clawless status**: parallel build coordinated 2026-04-26. Their B64 starts coding mid-next-week, launching in 2-3 weeks. **Signature + vocabulary now LOCKED** across both projects (see below). Two design principles adopted from their threat model:
+  - **(a) Server-side enforcement only.** Their reasoning: a malicious Skill in renderer context can't grant itself headroom. For us, the analog is `src/server.ts`, never `public/app.js`. Mirror the principle even though we don't have a renderer/skill split.
+  - **(b) Two-tier cap vocabulary.** OAuth bypasses the $ cap because cost is $0/call, but Max-OAuth (and Codex/ChatGPT-plan OAuth on Clawless side) still hit per-window rate limits, so a separate enforcement axis is needed. Adopted on both sides:
+    - **cost cap** — monthly $ ceiling. OAuth providers bypass; API-key providers enforce.
+    - **rate cap** — requests-per-window ceiling. Always enforced.
+- **Locked preflight signature** (both projects build against this):
+  ```ts
+  check(
+    agentId: string,
+    estimatedTokens?: number   // optional — omit for post-hoc cost accumulation; pass for precise rate-cap and Phase-2 cost-cap predictions
+  ): {
+    ok: boolean;
+    reason?: string;           // human-readable rejection reason when ok === false
+    capType?: 'cost' | 'rate'; // which cap tripped
+    remaining?: number;        // dollars for cost, requests for rate
+  }
+  ```
+- **Locked naming**: `CostGuard` is the system-internal / agent-to-agent name. User-facing UI keeps "Budget" as the Settings entry-point label.
+- **Files**: `src/costGuard.ts` (new — preflight primitive matching the locked signature; standalone, no Express/SDK imports so it lifts cleanly to Clawless's B64), `src/server.ts` (call `costGuard.check()` before every `query()`), `public/settings.html` (Budget tab — surfaces both cost cap and rate cap per agent).
+- **Acceptance**: agent over cost cap returns 402-ish error without burning tokens · agent over rate cap returns 429-ish error · OAuth providers bypass cost cap, still hit rate cap · API providers hit cost cap, rate cap optional Phase 2 · `costGuard.check()` matches the locked signature exactly · enforcement is server-side only · `src/costGuard.ts` has zero Express/SDK imports.
+
+##### C16d — Per-task approval gates
+
+- **What**: A task can be marked `requires_approval: true`. When the agent reaches a configured "stop point" (mid-task, before a Bash command, before file write — TBD scope), it pauses, posts a comment, and waits. Operator approves/rejects from the kanban; agent resumes or aborts.
+- **Why**: re-installs the safety net that `bypassPermissions` removes. Without this, autonomous trading (or any destructive action) is one prompt-injection away from disaster.
+- **Clawless status**: Clawless ships per-tool approval today (Strict / Standard / Permissive profiles + Allow Once / Allow Always / Deny prompts at the OpenClaw permission layer). Ours is per-task at the SDK harness layer — different abstraction. Clawless is **wait-and-see**: portable in concept, expensive to land on their side because it would mean a parallel approval system on top of OpenClaw's. **Success criterion for portability**: the prototype must show that per-task gates are *qualitatively different* from per-tool batching — e.g., they enable behaviors per-tool can't (cross-tool atomic groupings, conditional approvals based on task metadata, scheduled approvals that auto-expire). If it ends up being "per-tool with batching," document that, drop the portability ambition, and treat C16d as Command-Center-specific.
+- **Files**: `src/server.ts` (approval endpoints, hook integration), `src/db.ts` (approvals table), `public/app.js` (approve/reject UI on task cards).
+- **SDK angle**: this is the natural home for `PreToolUse` hooks — register a hook that intercepts dangerous tools and parks the run on an approval queue. Plan mode (C11) is the per-turn cousin; this is the per-task version.
+- **Acceptance**: task with `requires_approval: true` pauses and waits · approve from UI → agent resumes from the same point · reject → agent aborts cleanly with comment · approval state persists across restart · Bash/Write/Edit on production-marked cwd auto-trigger approval regardless of task setting (defense in depth) · written analysis (1 page) on whether per-task is qualitatively different from per-tool approval, with concrete examples — Clawless port decision flows from this.
+
+#### Demo target (north-star end-state)
+
+After all four sub-features ship, this should be possible:
+
+1. Create 6 custom agents (CEO + 5 specialists) via C15 with the Paperclip trading-firm system prompts.
+2. Schedule the CEO to wake every hour with prompt "review overnight specialist outputs and queue today's research cycle" (C16a).
+3. CEO delegates via SDK sub-agents (C01) — child tasks land in the durable queue (C16b).
+4. Each specialist has a $5/month token cap; Risk Management has $10 (C16c).
+5. Execution agent has `requires_approval` on any live-trading tool — operator gets pinged, approves from phone via Telegram (C05) (C16d).
+
+That's the full Paperclip demo, on the SDK, on Max OAuth, ~personal scale, no API key.
+
+#### Out of scope / explicitly NOT building
+
+- Org chart with reportsTo / titles — overkill for personal use; the agent list is the org chart.
+- Workspaces with git-worktree isolation — `cwd` per agent is enough at this scale.
+- Multi-runtime adapters (Codex / Cursor / OpenClaw) — Clawless's lane.
+- Hosted multi-tenant deployment — would require API-key auth and Anthropic commercial terms.
+- User-facing budget UX, license-gated runtime behavior, channel adapters, closed-source desktop product surface — Clawless's lane (per their reply 2026-04-26).
+
+#### Clawless cross-pollination — required reads before implementation
+
+Lane split confirmed with Clawless agent on 2026-04-26 after sharing the C16 design:
+
+| Sub-feature | Clawless status | Action for Command Center |
+|---|---|---|
+| C16a Scheduler | **Shipped (B06)**, different runtime | Build ours; steal UX patterns from B06; OAuth-healthcheck novelty may flow back |
+| C16b Durable queue | **B54 has no SQLite design — adopting ours wholesale** | Draft schema + atomic-checkout SQL → send to Clawless → implement (we're the source of truth) |
+| C16c Budget | **B64 starts mid-next-week**, signature LOCKED | Build against the locked signature in src/costGuard.ts; Clawless's B64 builds against the same shape |
+| C16d Approval gates | **Wait-and-see**, has per-tool already | Build it; produce written analysis on per-task-vs-per-tool qualitative difference; portability decision flows from that |
+
+**Operating rule**: C16c signature is locked and both sides build against it. C16b is on us to draft first; Clawless adopts mechanically when ready. Ping Clawless agent when C16b schema lands.
+
+---
+
 ## Future — Not Scheduled
 
 | Item | Notes |
@@ -234,7 +349,6 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 | **Cost & token tracking** | SDK's `ResultMessage` has usage info. Per-turn tokens, running total, forecast cost. Especially useful when the commercial path unlocks API-key mode. |
 | **Conversation export** | Download chat history as markdown or JSON. One-click share. |
 | **Multi-pane chat** | Split view — two agents side-by-side for model comparison or parallel work. Matches the YouTube "mission control" vibe. |
-| **Cron / scheduled tasks** | "Every morning at 8, run Ops on ~/Projects/ and DM me via Telegram." Pair with C03 and C05. |
 | **Right-panel file viewer** | When Ops reads a file, show it inline in a side pane so the user sees what the agent saw. Debugging + trust. |
 | **Keyboard shortcuts** | Cmd+K switch agent, Cmd+Enter send, Cmd+T tasks, Cmd+F folder. Muscle-memory speed boost. |
 | **Voice layer** | Whisper STT for input, TTS for output. Optional Pipecat/Gemini Live for a "war room" experience. Large effort; only worth it after the written flow is polished. |
@@ -278,3 +392,6 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 | 2026-04-25 | GitHub Pages | Pages enabled at `jaysidd.github.io/claude-agent-lab/` (source: main / root). Repo homepage URL set so the github.com sidebar shows the live URL. README is auto-served as the index by Jekyll. |
 | 2026-04-25 | Marketing | Replaced 3 OpenCode references with [Clawless](https://clawless.ai/) cross-promo (intro, "what this is not", acknowledgements). Honest "same author" disclosures kept in each. README also documents history/cost/export sections with the two new screenshots (13-history-modal, 14-chat-with-usage). |
 | 2026-04-25 | Mermaid fix | Streaming sequence-diagram Note text rewritten to plain prose — semicolons and parens were tripping GitHub's mermaid parser. Audit confirmed no other Notes have parser tripwires. |
+| 2026-04-26 | C16 epic added | Autonomous Agent Firm: scheduler + durable tasks + budgets + approvals. Phased over four sub-features (C16a–d). Designed after evaluating Paperclip's trading-firm demo and confirming the SDK + Max OAuth path is viable for personal-scale autonomous runs. Subsumes the old "Cron / scheduled tasks" Future entry. |
+| 2026-04-26 | C16 Clawless align | Cross-checked C16 with Clawless agent same day. C16a already shipped on their side as B06; C16b they want portably (will absorb into their B54); C16c parallel build (their B64, this week — must align preflight signature + main-process-enforcement principle + OAuth-bypass-but-keep-rate-cap); C16d wait-and-see pending qualitative-difference analysis vs their existing per-tool approval. Lane split: their lane includes user-facing budget UX, license-gated runtime, channel adapters, closed-source desktop. Required: design sync on C16b schema + C16c preflight signature before either side commits implementation. |
+| 2026-04-26 | C16c signature LOCKED | Second Clawless round same day. Preflight signature `check(agentId, estimatedTokens?) → {ok, reason?, capType?: 'cost'\|'rate', remaining?}` agreed both sides — `estimatedTokens` is optional (post-hoc cost accumulation is acceptable for Phase 1; required for rate-cap and Phase-2 precision). Two-tier vocabulary adopted: **cost cap** ($, OAuth bypasses) + **rate cap** (requests-per-window, always enforced). Naming: `CostGuard` system-internal, "Budget" user-facing. C16b: Clawless's B54 is greenfield (in-memory FIFO, zero SQLite design); our schema is the source of truth, they adopt mechanically. B64 starts coding mid-next-week, launches 2-3 weeks. |
