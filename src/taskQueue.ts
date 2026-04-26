@@ -127,6 +127,22 @@ export class TaskQueue {
   }
 
   enqueue(input: NewTask): Task {
+    if (input.priority !== undefined && !Number.isFinite(input.priority)) {
+      throw new Error("priority must be a finite number");
+    }
+    if (
+      input.maxAttempts !== undefined &&
+      (!Number.isInteger(input.maxAttempts) || input.maxAttempts < 1)
+    ) {
+      throw new Error("maxAttempts must be a positive integer");
+    }
+    if (
+      input.scheduledFor !== undefined &&
+      (!Number.isFinite(input.scheduledFor) || input.scheduledFor < 0)
+    ) {
+      throw new Error("scheduledFor must be a non-negative finite number (unix ms)");
+    }
+
     const id = randomUUID();
     const now = this.now();
     const metaJson = serializeMetadata(input.metadata);
@@ -199,6 +215,10 @@ export class TaskQueue {
   // task isn't queued (already running, terminal, or doesn't exist) or if
   // its scheduled_for is still in the future. Used by manual "run this now"
   // UIs where a worker picks a specific task rather than draining FIFO.
+  //
+  // Increments attempt_count per locked OQ #3 — manual runs count against
+  // max_attempts the same way crashes do. Three manual Runs on a task with
+  // maxAttempts: 3 will exhaust it.
   checkoutById(
     taskId: string,
     workerId: string,

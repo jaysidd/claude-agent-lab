@@ -83,8 +83,6 @@ type ApiTask = {
   assignedAgent: string;
   status: ApiTaskStatus;
   createdAt: number;
-  startedAt?: number;
-  completedAt?: number;
   result?: string;
   error?: string;
 };
@@ -102,9 +100,24 @@ function priorityFromNum(n: number): TaskPriority {
 }
 
 function statusFromQueue(s: QueueTask["status"]): ApiTaskStatus {
-  if (s === "checked_out") return "active";
-  if (s === "failed" || s === "cancelled") return "error";
-  return s; // queued, done
+  switch (s) {
+    case "queued":
+      return "queued";
+    case "checked_out":
+      return "active";
+    case "done":
+      return "done";
+    case "failed":
+    case "cancelled":
+      return "error";
+    default: {
+      // exhaustiveness guard — any new TaskStatus added to the queue must
+      // be mapped here explicitly, otherwise this won't compile.
+      const _exhaustive: never = s;
+      void _exhaustive;
+      return "error";
+    }
+  }
 }
 
 function toApiTask(t: QueueTask): ApiTask {
@@ -119,8 +132,6 @@ function toApiTask(t: QueueTask): ApiTask {
     assignedAgent: t.agentId,
     status: statusFromQueue(t.status),
     createdAt: t.createdAt,
-    startedAt: (t.metadata?.startedAt as number | undefined) ?? undefined,
-    completedAt: (t.metadata?.completedAt as number | undefined) ?? undefined,
     result: typeof t.result === "string" ? t.result : undefined,
     error: errMsg,
   };
@@ -639,11 +650,8 @@ app.post("/api/task/:id/run", async (req, res) => {
     return res.status(409).json(fresh ? toApiTask(fresh) : { error: "task not available" });
   }
 
-  // Stash startedAt as metadata for UI display. The queue itself uses
-  // updated_at; metadata just preserves the C03 wire-format field.
-  const startedAt = Date.now();
-
   let finalText = "";
+  let agentError: string | null = null;
   const subAgents = subAgentsFor(agent.id);
   const plan = planMode.get(agent.id) === true;
   try {
@@ -663,30 +671,49 @@ app.post("/api/task/:id/run", async (req, res) => {
         finalText = anyMsg.result;
       }
     }
-    taskQueue.complete(taskId, WORKER_ID, finalText);
   } catch (err: any) {
-    taskQueue.fail(taskId, WORKER_ID, {
-      message: err?.message ?? "agent failed",
-    });
+    agentError = err?.message ?? "agent failed";
   }
 
-  // Patch UI-only timestamps onto the row so the wire format keeps the
-  // C03 fields without polluting the queue's core schema.
-  const completedAt = Date.now();
-  db.prepare(
-    `UPDATE tasks
-        SET metadata_json = json(?)
-      WHERE id = ?`,
-  ).run(JSON.stringify({ startedAt, completedAt }), taskId);
+  // Wrap queue terminal updates so a row that was reaped (lease expired
+  // mid-query, reaper requeued) or hard-deleted out from under us doesn't
+  // crash the request handler. Both paths land on UPDATE-matches-zero,
+  // which the queue surfaces as a throw.
+  try {
+    if (agentError !== null) {
+      taskQueue.fail(taskId, WORKER_ID, { message: agentError });
+    } else {
+      taskQueue.complete(taskId, WORKER_ID, finalText);
+    }
+  } catch (err: any) {
+    console.warn(
+      `[task ${taskId}] terminal update failed (likely reaped or deleted mid-run): ${err?.message ?? err}`,
+    );
+  }
 
   const final = taskQueue.get(taskId);
   res.json(final ? toApiTask(final) : null);
 });
 
 app.delete("/api/task/:id", (req, res) => {
-  // Hard-delete by id. Host policy — TaskQueue does not expose a delete
-  // because retention belongs to the host. Direct SQL on the locked schema.
-  db.prepare("DELETE FROM tasks WHERE id = ?").run(req.params.id);
+  // Hard-delete is constrained to terminal states. Deleting a checked_out
+  // row would orphan a worker mid-execution and crash its terminal update.
+  // For non-terminal rows, callers should cancel via the queue instead
+  // (currently no UI surface — UI already disables Delete on active tasks).
+  const result = db
+    .prepare(
+      `DELETE FROM tasks
+        WHERE id = ?
+          AND status IN ('done', 'failed', 'cancelled')`,
+    )
+    .run(req.params.id);
+  if (result.changes === 0) {
+    const current = taskQueue.get(req.params.id);
+    if (!current) return res.json({ ok: true }); // already gone — idempotent
+    return res
+      .status(409)
+      .json({ error: "task is not in a terminal state", task: toApiTask(current) });
+  }
   res.json({ ok: true });
 });
 
