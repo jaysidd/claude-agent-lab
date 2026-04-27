@@ -281,4 +281,74 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     // List
     await expect(bubble.locator("li")).toHaveCount(4);
   });
+
+  test("C16b — task queue persists via SQLite + wire shape preserved", async ({ request }) => {
+    // Tasks round-trip through SQLite (durable across server restarts).
+    // POST returns the C03-shape JSON; GET /api/tasks lists it back.
+    const created = await request.post("http://localhost:3333/api/task", {
+      data: {
+        description: "C16b QA — persistence smoke",
+        priority: "high",
+        agentId: "ops",
+      },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+    expect(task.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(task.status).toBe("queued");
+    expect(task.priority).toBe("high");
+    expect(task.assignedAgent).toBe("ops");
+
+    const listed = await (await request.get("http://localhost:3333/api/tasks")).json();
+    const found = listed.find((t: { id: string }) => t.id === task.id);
+    expect(found).toBeDefined();
+    expect(found.status).toBe("queued");
+
+    // Cleanup: hard-cancel via raw API would need a /cancel route which doesn't
+    // exist; we leave the row. pruneCompletedTasks only touches terminal rows,
+    // and the kanban surfaces only the most recent so this stays out of the way.
+    // Tracked: future tests should add a /cancel route or accept the leftover.
+  });
+
+  test("C16b — DELETE on queued task returns 409 with current state", async ({ request }) => {
+    // Reviewer R2 fix: hard-delete is constrained to terminal states.
+    const created = await request.post("http://localhost:3333/api/task", {
+      data: { description: "C16b QA — delete-on-queued", priority: "low", agentId: "main" },
+    });
+    const task = await created.json();
+
+    const res = await request.delete(`http://localhost:3333/api/task/${task.id}`);
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.error).toMatch(/terminal/i);
+    expect(body.task.id).toBe(task.id);
+    expect(body.task.status).toBe("queued");
+  });
+
+  test("C16b — DELETE on missing task is idempotent", async ({ request }) => {
+    // Idempotent 200 OK so the UI can fire-and-forget on stale IDs.
+    const res = await request.delete(
+      "http://localhost:3333/api/task/00000000-0000-0000-0000-000000000000",
+    );
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  test("C16b — POST /api/task validates priority enum", async ({ request }) => {
+    // Priority must be one of low/medium/high. Anything else is rejected at
+    // the route boundary, before the queue's enqueue is called.
+    const res = await request.post("http://localhost:3333/api/task", {
+      data: { description: "bad", priority: "urgent" },
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/priority/i);
+  });
+
+  test("C16b — POST /api/task validates description type", async ({ request }) => {
+    const res = await request.post("http://localhost:3333/api/task", {
+      data: { description: 42, priority: "low" },
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/description/i);
+  });
 });
