@@ -139,19 +139,29 @@ function toApiTask(t: QueueTask): ApiTask {
 
 const TASK_RETENTION_CAP = 50;
 
+const countTerminalStmt = db.prepare(
+  `SELECT COUNT(*) AS n FROM tasks WHERE status IN ('done', 'failed', 'cancelled')`,
+);
+
+const pruneTerminalStmt = db.prepare(
+  `DELETE FROM tasks
+     WHERE status IN ('done', 'failed', 'cancelled')
+       AND id NOT IN (
+         SELECT id FROM tasks
+          WHERE status IN ('done', 'failed', 'cancelled')
+          ORDER BY updated_at DESC
+          LIMIT ?
+       )`,
+);
+
 function pruneCompletedTasks(cap = TASK_RETENTION_CAP) {
-  // Hard-delete oldest terminal rows beyond the cap. Keeps the queue file
-  // bounded for personal-scale use. Host policy — not part of TaskQueue.
-  db.prepare(
-    `DELETE FROM tasks
-       WHERE status IN ('done', 'failed', 'cancelled')
-         AND id NOT IN (
-           SELECT id FROM tasks
-            WHERE status IN ('done', 'failed', 'cancelled')
-            ORDER BY updated_at DESC
-            LIMIT ?
-         )`,
-  ).run(cap);
+  // Skip the heavier DELETE-with-NOT-IN-subquery when the table is under
+  // the cap. The COUNT is a single index probe; the DELETE walks a TEMP
+  // B-TREE for the inner ORDER BY, which is wasted work the 99% of the
+  // time the cap is unmet. (Perf audit P2.)
+  const { n } = countTerminalStmt.get() as { n: number };
+  if (n <= cap) return;
+  pruneTerminalStmt.run(cap);
 }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -598,9 +608,11 @@ app.post("/api/plan/:agentId", (req, res) => {
 });
 
 app.get("/api/tasks", (_req, res) => {
-  const all = taskQueue.list();
-  const sorted = [...all].sort((a, b) => b.createdAt - a.createdAt);
-  res.json(sorted.map(toApiTask));
+  // Kanban wants newest-first; the queue's natural priority-first order is
+  // for next-in-queue displays (B54). Pass orderBy through so the SQL sort
+  // is the only sort. (Perf audit P1.)
+  const all = taskQueue.list({ orderBy: "createdAt DESC" });
+  res.json(all.map(toApiTask));
 });
 
 app.post("/api/task", async (req, res) => {

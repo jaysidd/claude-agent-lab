@@ -53,6 +53,10 @@ export type TaskFilter = {
   status?: TaskStatus | TaskStatus[];
   agentId?: string;
   limit?: number;
+  // Default order is priority-first (DESC), then created_at ASC — the natural
+  // queue order, useful for B54's "next-in-queue" displays. Hosts that want
+  // newest-first for a kanban can pass `orderBy: 'createdAt DESC'`.
+  orderBy?: "priority" | "createdAt DESC" | "createdAt ASC";
 };
 
 export type TaskQueueOptions = {
@@ -468,10 +472,17 @@ export class TaskQueue {
         ? `LIMIT ${Math.floor(filter.limit)}`
         : "";
 
+    const orderClause =
+      filter?.orderBy === "createdAt DESC"
+        ? "ORDER BY created_at DESC"
+        : filter?.orderBy === "createdAt ASC"
+          ? "ORDER BY created_at ASC"
+          : "ORDER BY priority DESC, created_at ASC";
+
     const sql = `
       SELECT * FROM tasks
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
-      ORDER BY priority DESC, created_at ASC
+      ${orderClause}
       ${limitClause}
     `;
 
