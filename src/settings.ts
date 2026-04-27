@@ -24,10 +24,13 @@ export type MaskedSetting = {
   updatedAt: number;
 };
 
+// Module-scoped prepared statement — re-used by every getSetting() call.
+// Saves ~17 µs per CostGuard.check() invocation (5× resolveCaps lookups)
+// and benefits every configValue caller. Perf audit C16c P1.
+const getSettingStmt = db.prepare("SELECT value FROM settings WHERE key = ?");
+
 export function getSetting(key: string): string | undefined {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
-    | { value: string }
-    | undefined;
+  const row = getSettingStmt.get(key) as { value: string } | undefined;
   return row?.value || undefined;
 }
 
