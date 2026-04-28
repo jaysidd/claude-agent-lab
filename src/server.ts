@@ -4,7 +4,6 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
-import { randomUUID } from "node:crypto";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { AGENTS, MODELS } from "./agents.js";
 import {
@@ -67,21 +66,104 @@ import {
   setSessionTitle,
   deleteSession,
 } from "./sessions.js";
+import { db } from "./memory.js";
+import { taskQueue, WORKER_ID } from "./taskQueueInstance.js";
+import type { Task as QueueTask } from "./taskQueue.js";
+import { costGuard } from "./costGuardInstance.js";
 
 type TaskPriority = "low" | "medium" | "high";
-type TaskStatus = "queued" | "active" | "done" | "error";
-type Task = {
+type ApiTaskStatus = "queued" | "active" | "done" | "error";
+
+// Wire-format task shape returned to the frontend. Stable contract — UI
+// classnames and conditional rendering depend on these field names and
+// status strings.
+type ApiTask = {
   id: string;
   description: string;
   priority: TaskPriority;
   assignedAgent: string;
-  status: TaskStatus;
+  status: ApiTaskStatus;
   createdAt: number;
-  startedAt?: number;
-  completedAt?: number;
   result?: string;
   error?: string;
 };
+
+const PRIORITY_TO_NUM: Record<TaskPriority, number> = {
+  low: 0,
+  medium: 5,
+  high: 10,
+};
+
+function priorityFromNum(n: number): TaskPriority {
+  if (n >= 10) return "high";
+  if (n >= 5) return "medium";
+  return "low";
+}
+
+function statusFromQueue(s: QueueTask["status"]): ApiTaskStatus {
+  switch (s) {
+    case "queued":
+      return "queued";
+    case "checked_out":
+      return "active";
+    case "done":
+      return "done";
+    case "failed":
+    case "cancelled":
+      return "error";
+    default: {
+      // exhaustiveness guard — any new TaskStatus added to the queue must
+      // be mapped here explicitly, otherwise this won't compile.
+      const _exhaustive: never = s;
+      void _exhaustive;
+      return "error";
+    }
+  }
+}
+
+function toApiTask(t: QueueTask): ApiTask {
+  const errMsg =
+    t.error && typeof t.error === "object" && "message" in t.error
+      ? String(t.error.message)
+      : undefined;
+  return {
+    id: t.id,
+    description: t.description,
+    priority: priorityFromNum(t.priority),
+    assignedAgent: t.agentId,
+    status: statusFromQueue(t.status),
+    createdAt: t.createdAt,
+    result: typeof t.result === "string" ? t.result : undefined,
+    error: errMsg,
+  };
+}
+
+const TASK_RETENTION_CAP = 50;
+
+const countTerminalStmt = db.prepare(
+  `SELECT COUNT(*) AS n FROM tasks WHERE status IN ('done', 'failed', 'cancelled')`,
+);
+
+const pruneTerminalStmt = db.prepare(
+  `DELETE FROM tasks
+     WHERE status IN ('done', 'failed', 'cancelled')
+       AND id NOT IN (
+         SELECT id FROM tasks
+          WHERE status IN ('done', 'failed', 'cancelled')
+          ORDER BY updated_at DESC
+          LIMIT ?
+       )`,
+);
+
+function pruneCompletedTasks(cap = TASK_RETENTION_CAP) {
+  // Skip the heavier DELETE-with-NOT-IN-subquery when the table is under
+  // the cap. The COUNT is a single index probe; the DELETE walks a TEMP
+  // B-TREE for the inner ORDER BY, which is wasted work the 99% of the
+  // time the cap is unmet. (Perf audit P2.)
+  const { n } = countTerminalStmt.get() as { n: number };
+  if (n <= cap) return;
+  pruneTerminalStmt.run(cap);
+}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
@@ -93,7 +175,6 @@ app.use(express.static(PUBLIC_DIR));
 const sessionByAgent = new Map<string, string>();
 const modelOverride = new Map<string, string>();
 const planMode = new Map<string, boolean>();
-const tasks = new Map<string, Task>();
 let currentCwd = os.homedir();
 
 async function classifyTask(description: string): Promise<string> {
@@ -249,6 +330,15 @@ app.post("/api/chat", async (req, res) => {
     return res.status(400).json({ error: "empty message" });
   }
 
+  const guard = costGuard.check(agent.id);
+  if (!guard.ok) {
+    return res.status(429).json({
+      error: guard.reason ?? "budget cap reached",
+      capType: guard.capType,
+      remaining: guard.remaining,
+    });
+  }
+
   const resumeId = sessionByAgent.get(agent.id);
   const modelId = effectiveModel(agent.id);
   const plan = planMode.get(agent.id) === true;
@@ -297,8 +387,19 @@ app.post("/api/chat", async (req, res) => {
     }
   } catch (err: any) {
     console.error("chat error:", err);
+    // Failed calls still consume rate budget — record with zero cost.
+    costGuard.record(agent.id, {
+      isOAuth: apiKeySource === "none",
+    });
     return res.status(500).json({ error: err?.message ?? "agent error" });
   }
+
+  costGuard.record(agent.id, {
+    inputTokens: usage?.input_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? 0,
+    costUsd: totalCostUsd ?? 0,
+    isOAuth: apiKeySource === "none",
+  });
 
   if (newSessionId) sessionByAgent.set(agent.id, newSessionId);
 
@@ -341,6 +442,15 @@ app.post("/api/chat/stream", async (req, res) => {
   if (!agent) return res.status(400).json({ error: "unknown agent" });
   if (typeof message !== "string" || !message.trim()) {
     return res.status(400).json({ error: "empty message" });
+  }
+
+  const guard = costGuard.check(agent.id);
+  if (!guard.ok) {
+    return res.status(429).json({
+      error: guard.reason ?? "budget cap reached",
+      capType: guard.capType,
+      remaining: guard.remaining,
+    });
   }
 
   res.setHeader("Content-Type", "application/x-ndjson");
@@ -451,6 +561,15 @@ app.post("/api/chat/stream", async (req, res) => {
     }
   }
 
+  // Record usage even on partial/aborted streams — they still consume rate
+  // budget. costUsd defaults to 0 when no result message arrived.
+  costGuard.record(agent.id, {
+    inputTokens: streamUsage?.input_tokens ?? 0,
+    outputTokens: streamUsage?.output_tokens ?? 0,
+    costUsd: streamCost ?? 0,
+    isOAuth: streamApiKeySource === "none",
+  });
+
   if (newSessionId && !clientClosed) sessionByAgent.set(agent.id, newSessionId);
 
   // Persist the turn for History
@@ -480,6 +599,14 @@ app.post("/api/chat/stream", async (req, res) => {
 app.post("/api/reset/:agentId", (req, res) => {
   sessionByAgent.delete(req.params.agentId);
   res.json({ ok: true });
+});
+
+// ----- CostGuard -----
+
+app.get("/api/costguard/status", (req, res) => {
+  const agentId = (req.query.agentId as string) || "";
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
+  res.json(costGuard.status(agentId));
 });
 
 // ----- Memory -----
@@ -528,7 +655,11 @@ app.post("/api/plan/:agentId", (req, res) => {
 });
 
 app.get("/api/tasks", (_req, res) => {
-  res.json(Array.from(tasks.values()).sort((a, b) => b.createdAt - a.createdAt));
+  // Kanban wants newest-first; the queue's natural priority-first order is
+  // for next-in-queue displays (B54). Pass orderBy through so the SQL sort
+  // is the only sort. (Perf audit P1.)
+  const all = taskQueue.list({ orderBy: "createdAt DESC" });
+  res.json(all.map(toApiTask));
 });
 
 app.post("/api/task", async (req, res) => {
@@ -547,50 +678,56 @@ app.post("/api/task", async (req, res) => {
   const assignedAgent =
     agentOverride && findAgent(agentOverride) ? agentOverride : await classifyTask(description);
 
-  const task: Task = {
-    id: randomUUID(),
+  const task = taskQueue.enqueue({
     description,
-    priority,
-    assignedAgent,
-    status: "queued",
-    createdAt: Date.now(),
-  };
-  tasks.set(task.id, task);
+    agentId: assignedAgent,
+    priority: PRIORITY_TO_NUM[priority],
+  });
   pruneCompletedTasks();
-  res.json(task);
+  res.json(toApiTask(task));
 });
 
-function pruneCompletedTasks(cap = 50) {
-  const completed = Array.from(tasks.values())
-    .filter((t) => t.status === "done" || t.status === "error")
-    .sort((a, b) => (a.completedAt ?? 0) - (b.completedAt ?? 0));
-  const excess = completed.length - cap;
-  for (let i = 0; i < excess; i++) tasks.delete(completed[i].id);
-}
-
 app.post("/api/task/:id/run", async (req, res) => {
-  const task = tasks.get(req.params.id);
-  if (!task) return res.status(404).json({ error: "task not found" });
-  if (task.status !== "queued") {
-    return res.status(400).json({ error: "task already " + task.status });
+  const taskId = req.params.id;
+  const existing = taskQueue.get(taskId);
+  if (!existing) return res.status(404).json({ error: "task not found" });
+  if (existing.status !== "queued") {
+    return res.status(400).json({ error: "task already " + statusFromQueue(existing.status) });
   }
 
-  const agent = findAgent(task.assignedAgent);
+  const agent = findAgent(existing.agentId);
   if (!agent) {
-    task.status = "error";
-    task.error = "assigned agent no longer exists";
-    return res.json(task);
+    taskQueue.cancel(taskId, "assigned agent no longer exists");
+    const cancelled = taskQueue.get(taskId);
+    return res.json(cancelled ? toApiTask(cancelled) : null);
   }
 
-  task.status = "active";
-  task.startedAt = Date.now();
+  const guard = costGuard.check(agent.id);
+  if (!guard.ok) {
+    return res.status(429).json({
+      error: guard.reason ?? "budget cap reached",
+      capType: guard.capType,
+      remaining: guard.remaining,
+    });
+  }
+
+  const checked = taskQueue.checkoutById(taskId, WORKER_ID);
+  if (!checked) {
+    // Lost the race to another caller; reflect current state to the client.
+    const fresh = taskQueue.get(taskId);
+    return res.status(409).json(fresh ? toApiTask(fresh) : { error: "task not available" });
+  }
 
   let finalText = "";
+  let agentError: string | null = null;
+  let taskUsage: any;
+  let taskCostUsd: number | undefined;
+  let taskApiKeySource: string | undefined;
   const subAgents = subAgentsFor(agent.id);
   const plan = planMode.get(agent.id) === true;
   try {
     for await (const msg of query({
-      prompt: task.description,
+      prompt: checked.description,
       options: {
         allowedTools: agent.allowedTools,
         systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
@@ -601,24 +738,65 @@ app.post("/api/task/:id/run", async (req, res) => {
       },
     })) {
       const anyMsg = msg as any;
-      if ("result" in anyMsg && typeof anyMsg.result === "string") {
-        finalText = anyMsg.result;
+      if (anyMsg.type === "system" && anyMsg.subtype === "init") {
+        taskApiKeySource = anyMsg.apiKeySource ?? anyMsg.data?.apiKeySource;
+      }
+      if (anyMsg.type === "result") {
+        if (typeof anyMsg.result === "string") finalText = anyMsg.result;
+        if (anyMsg.usage) taskUsage = anyMsg.usage;
+        if (typeof anyMsg.total_cost_usd === "number") taskCostUsd = anyMsg.total_cost_usd;
       }
     }
-    task.status = "done";
-    task.completedAt = Date.now();
-    task.result = finalText;
   } catch (err: any) {
-    task.status = "error";
-    task.error = err?.message ?? "agent failed";
-    task.completedAt = Date.now();
+    agentError = err?.message ?? "agent failed";
   }
 
-  res.json(task);
+  costGuard.record(agent.id, {
+    inputTokens: taskUsage?.input_tokens ?? 0,
+    outputTokens: taskUsage?.output_tokens ?? 0,
+    costUsd: taskCostUsd ?? 0,
+    isOAuth: taskApiKeySource === "none",
+  });
+
+  // Wrap queue terminal updates so a row that was reaped (lease expired
+  // mid-query, reaper requeued) or hard-deleted out from under us doesn't
+  // crash the request handler. Both paths land on UPDATE-matches-zero,
+  // which the queue surfaces as a throw.
+  try {
+    if (agentError !== null) {
+      taskQueue.fail(taskId, WORKER_ID, { message: agentError });
+    } else {
+      taskQueue.complete(taskId, WORKER_ID, finalText);
+    }
+  } catch (err: any) {
+    console.warn(
+      `[task ${taskId}] terminal update failed (likely reaped or deleted mid-run): ${err?.message ?? err}`,
+    );
+  }
+
+  const final = taskQueue.get(taskId);
+  res.json(final ? toApiTask(final) : null);
 });
 
 app.delete("/api/task/:id", (req, res) => {
-  tasks.delete(req.params.id);
+  // Hard-delete is constrained to terminal states. Deleting a checked_out
+  // row would orphan a worker mid-execution and crash its terminal update.
+  // For non-terminal rows, callers should cancel via the queue instead
+  // (currently no UI surface — UI already disables Delete on active tasks).
+  const result = db
+    .prepare(
+      `DELETE FROM tasks
+        WHERE id = ?
+          AND status IN ('done', 'failed', 'cancelled')`,
+    )
+    .run(req.params.id);
+  if (result.changes === 0) {
+    const current = taskQueue.get(req.params.id);
+    if (!current) return res.json({ ok: true }); // already gone — idempotent
+    return res
+      .status(409)
+      .json({ error: "task is not in a terminal state", task: toApiTask(current) });
+  }
   res.json({ ok: true });
 });
 
@@ -768,10 +946,29 @@ app.post("/api/settings", (req, res) => {
     SETTINGS_SCHEMA.flatMap((s) => s.fields).map((f) => f.key),
   );
 
+  // CostGuard supports per-agent override keys for ONLY these two base keys.
+  // `rate_window_seconds` is intentionally global-only (resolver never reads
+  // a per-agent variant). The trailing segment must be a known agent id.
+  const COST_GUARD_OVERRIDE_BASES = [
+    "costguard.cost_cap_monthly_usd",
+    "costguard.rate_cap_per_window",
+  ];
+  const isCostGuardOverride = (key: string): boolean => {
+    for (const base of COST_GUARD_OVERRIDE_BASES) {
+      const prefix = base + ".";
+      if (!key.startsWith(prefix)) continue;
+      const agentId = key.slice(prefix.length);
+      if (!agentId || agentId.includes(".")) return false;
+      return !!findAgent(agentId);
+    }
+    return false;
+  };
+
   let changed = 0;
   for (const entry of entries) {
     const { key, value, isSecret } = entry ?? {};
-    if (typeof key !== "string" || !knownKeys.has(key)) continue;
+    if (typeof key !== "string") continue;
+    if (!knownKeys.has(key) && !isCostGuardOverride(key)) continue;
     if (value === null || value === undefined) {
       deleteSetting(key);
       changed++;

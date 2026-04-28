@@ -24,10 +24,13 @@ export type MaskedSetting = {
   updatedAt: number;
 };
 
+// Module-scoped prepared statement — re-used by every getSetting() call.
+// Saves ~17 µs per CostGuard.check() invocation (5× resolveCaps lookups)
+// and benefits every configValue caller. Perf audit C16c P1.
+const getSettingStmt = db.prepare("SELECT value FROM settings WHERE key = ?");
+
 export function getSetting(key: string): string | undefined {
-  const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as
-    | { value: string }
-    | undefined;
+  const row = getSettingStmt.get(key) as { value: string } | undefined;
   return row?.value || undefined;
 }
 
@@ -101,6 +104,32 @@ export type SettingsSection = {
 };
 
 export const SETTINGS_SCHEMA: SettingsSection[] = [
+  {
+    section: "Budget (CostGuard)",
+    fields: [
+      {
+        key: "costguard.cost_cap_monthly_usd",
+        label: "Monthly cost cap (USD, global default)",
+        placeholder: "leave blank for no cap",
+        type: "text",
+        help: "Caps per-agent monthly $ across API-key calls. OAuth (Max plan) calls record cost as $0 and automatically bypass this cap. Per-agent overrides go in keys like costguard.cost_cap_monthly_usd.<agentId>.",
+      },
+      {
+        key: "costguard.rate_cap_per_window",
+        label: "Rate cap (requests per window, global default)",
+        placeholder: "leave blank for no cap",
+        type: "text",
+        help: "Caps requests per agent per sliding window. Always enforced, including for OAuth providers. Per-agent overrides: costguard.rate_cap_per_window.<agentId>.",
+      },
+      {
+        key: "costguard.rate_window_seconds",
+        label: "Rate window (seconds)",
+        placeholder: "3600",
+        type: "text",
+        help: "Sliding-window length for the rate cap. Default 3600 (one hour). Single global value — does not vary per agent.",
+      },
+    ],
+  },
   {
     section: "WhisprDesk (voice)",
     fields: [

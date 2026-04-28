@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "claudelink": {
+      "type": "stdio",
+      "command": "claudelink-server"
+    }
+  }
+}

@@ -1,4 +1,22 @@
 import { test, expect, type Page } from "@playwright/test";
+import Database from "better-sqlite3";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const LAB_DB = path.resolve(TEST_DIR, "..", "data", "lab.db");
+
+function seedLedgerRow(agentId: string): void {
+  // Direct DB write — used to seed the cost_ledger so we can exercise the
+  // cap-exhausted preflight path without firing a real SDK call. The server
+  // runs in WAL mode so concurrent reads/writes are fine.
+  const db = new Database(LAB_DB);
+  db.prepare(
+    `INSERT INTO cost_ledger (agent_id, occurred_at, input_tokens, output_tokens, cost_usd, is_oauth)
+     VALUES (?, ?, 0, 0, 0, 1)`,
+  ).run(agentId, Date.now());
+  db.close();
+}
 
 test.describe("Command Center — new features smoke (no engine)", () => {
   test("memory panel: open, add, list, delete", async ({ page, request }) => {
@@ -280,5 +298,219 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     await expect(bubble.locator("strong", { hasText: "Available agents" })).toBeVisible();
     // List
     await expect(bubble.locator("li")).toHaveCount(4);
+  });
+
+  test("C16b — task queue persists via SQLite + wire shape preserved", async ({ request }) => {
+    // Tasks round-trip through SQLite (durable across server restarts).
+    // POST returns the C03-shape JSON; GET /api/tasks lists it back.
+    const created = await request.post("http://localhost:3333/api/task", {
+      data: {
+        description: "C16b QA — persistence smoke",
+        priority: "high",
+        agentId: "ops",
+      },
+    });
+    expect(created.ok()).toBeTruthy();
+    const task = await created.json();
+    expect(task.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(task.status).toBe("queued");
+    expect(task.priority).toBe("high");
+    expect(task.assignedAgent).toBe("ops");
+
+    const listed = await (await request.get("http://localhost:3333/api/tasks")).json();
+    const found = listed.find((t: { id: string }) => t.id === task.id);
+    expect(found).toBeDefined();
+    expect(found.status).toBe("queued");
+
+    // Cleanup: hard-cancel via raw API would need a /cancel route which doesn't
+    // exist; we leave the row. pruneCompletedTasks only touches terminal rows,
+    // and the kanban surfaces only the most recent so this stays out of the way.
+    // Tracked: future tests should add a /cancel route or accept the leftover.
+  });
+
+  test("C16b — DELETE on queued task returns 409 with current state", async ({ request }) => {
+    // Reviewer R2 fix: hard-delete is constrained to terminal states.
+    const created = await request.post("http://localhost:3333/api/task", {
+      data: { description: "C16b QA — delete-on-queued", priority: "low", agentId: "main" },
+    });
+    const task = await created.json();
+
+    const res = await request.delete(`http://localhost:3333/api/task/${task.id}`);
+    expect(res.status()).toBe(409);
+    const body = await res.json();
+    expect(body.error).toMatch(/terminal/i);
+    expect(body.task.id).toBe(task.id);
+    expect(body.task.status).toBe("queued");
+  });
+
+  test("C16b — DELETE on missing task is idempotent", async ({ request }) => {
+    // Idempotent 200 OK so the UI can fire-and-forget on stale IDs.
+    const res = await request.delete(
+      "http://localhost:3333/api/task/00000000-0000-0000-0000-000000000000",
+    );
+    expect(res.status()).toBe(200);
+    expect(await res.json()).toEqual({ ok: true });
+  });
+
+  test("C16b — POST /api/task validates priority enum", async ({ request }) => {
+    // Priority must be one of low/medium/high. Anything else is rejected at
+    // the route boundary, before the queue's enqueue is called.
+    const res = await request.post("http://localhost:3333/api/task", {
+      data: { description: "bad", priority: "urgent" },
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/priority/i);
+  });
+
+  test("C16b — POST /api/task validates description type", async ({ request }) => {
+    const res = await request.post("http://localhost:3333/api/task", {
+      data: { description: 42, priority: "low" },
+    });
+    expect(res.status()).toBe(400);
+    expect((await res.json()).error).toMatch(/description/i);
+  });
+
+  test("C16c — settings schema exposes Budget (CostGuard) section", async ({ request }) => {
+    const r = await request.get("http://localhost:3333/api/settings");
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    const sections = body.schema.map((s: { section: string }) => s.section);
+    expect(sections).toContain("Budget (CostGuard)");
+    const budget = body.schema.find(
+      (s: { section: string }) => s.section === "Budget (CostGuard)",
+    );
+    const keys = budget.fields.map((f: { key: string }) => f.key);
+    expect(keys).toContain("costguard.cost_cap_monthly_usd");
+    expect(keys).toContain("costguard.rate_cap_per_window");
+    expect(keys).toContain("costguard.rate_window_seconds");
+  });
+
+  test("C16c — settings POST allowlists per-agent override keys", async ({ request }) => {
+    // M1 fix: only the two cap base keys with per-agent semantics, with a
+    // valid known agent id, with no extra dotted segments.
+    const body = (entries: Array<{ key: string; value: string | null }>) =>
+      ({ entries });
+    // Reject: rate_window_seconds has no per-agent variant.
+    const r1 = await request.post("http://localhost:3333/api/settings", {
+      data: body([{ key: "costguard.rate_window_seconds.main", value: "60" }]),
+    });
+    expect((await r1.json()).changed).toBe(0);
+    // Reject: unknown agent.
+    const r2 = await request.post("http://localhost:3333/api/settings", {
+      data: body([{ key: "costguard.rate_cap_per_window.nonexistent_agent", value: "1" }]),
+    });
+    expect((await r2.json()).changed).toBe(0);
+    // Reject: dotted trailer.
+    const r3 = await request.post("http://localhost:3333/api/settings", {
+      data: body([{ key: "costguard.rate_cap_per_window.foo.bar", value: "1" }]),
+    });
+    expect((await r3.json()).changed).toBe(0);
+    // Accept: valid override on a known agent.
+    const r4 = await request.post("http://localhost:3333/api/settings", {
+      data: body([{ key: "costguard.rate_cap_per_window.ops", value: "100" }]),
+    });
+    expect((await r4.json()).changed).toBe(1);
+    // Cleanup.
+    await request.post("http://localhost:3333/api/settings", {
+      data: body([{ key: "costguard.rate_cap_per_window.ops", value: null }]),
+    });
+  });
+
+  test("C16c — /api/costguard/status reports usage shape", async ({ request }) => {
+    const r = await request.get(
+      "http://localhost:3333/api/costguard/status?agentId=main",
+    );
+    expect(r.ok()).toBeTruthy();
+    const body = await r.json();
+    expect(typeof body.rateUsed).toBe("number");
+    expect(typeof body.costUsedThisMonth).toBe("number");
+    // No cap configured → remaining is null.
+    expect(body.rateRemaining).toBe(null);
+    expect(body.costRemaining).toBe(null);
+
+    const bad = await request.get(
+      "http://localhost:3333/api/costguard/status?agentId=does_not_exist",
+    );
+    expect(bad.status()).toBe(400);
+  });
+
+  test("C16c — exhausted rate cap returns 429 on /api/chat without firing SDK", async ({
+    request,
+  }) => {
+    // Strategy: seed at least one ledger row directly, read current count, then
+    // set the per-agent cap to that count. Next call has remaining=0 and is
+    // rejected by check() before any SDK call. Stays in the smoke project.
+    const agentId = "ops";
+    seedLedgerRow(agentId);
+    const status = await (
+      await request.get(`http://localhost:3333/api/costguard/status?agentId=${agentId}`)
+    ).json();
+    const cap = status.rateUsed;
+    expect(cap).toBeGreaterThanOrEqual(1);
+
+    await request.post("http://localhost:3333/api/settings", {
+      data: {
+        entries: [
+          { key: `costguard.rate_cap_per_window.${agentId}`, value: String(cap) },
+        ],
+      },
+    });
+    try {
+      const r = await request.post("http://localhost:3333/api/chat", {
+        data: { agentId, message: "would never reach the SDK" },
+      });
+      expect(r.status()).toBe(429);
+      const body = await r.json();
+      expect(body.capType).toBe("rate");
+      expect(body.remaining).toBe(0);
+      expect(body.error).toMatch(/rate cap/i);
+
+      // Stream route uses the same preflight.
+      const s = await request.post("http://localhost:3333/api/chat/stream", {
+        data: { agentId, message: "also never reaches the SDK" },
+      });
+      expect(s.status()).toBe(429);
+      const sBody = await s.json();
+      expect(sBody.capType).toBe("rate");
+    } finally {
+      // Cleanup — null clears the override.
+      await request.post("http://localhost:3333/api/settings", {
+        data: {
+          entries: [
+            { key: `costguard.rate_cap_per_window.${agentId}`, value: null },
+          ],
+        },
+      });
+    }
+  });
+
+  test("C16c — cap value of 0 is treated as unset", async ({ request }) => {
+    // M2 fix: schema help text says "leave blank for no cap". 0 collapses to
+    // unset to avoid the footgun where typing 0 silently bricks the agent.
+    const agentId = "content";
+    await request.post("http://localhost:3333/api/settings", {
+      data: {
+        entries: [
+          { key: `costguard.rate_cap_per_window.${agentId}`, value: "0" },
+        ],
+      },
+    });
+    try {
+      const status = await (
+        await request.get(
+          `http://localhost:3333/api/costguard/status?agentId=${agentId}`,
+        )
+      ).json();
+      // 0 was stored but resolver treats it as unset → remaining is null.
+      expect(status.rateRemaining).toBe(null);
+    } finally {
+      await request.post("http://localhost:3333/api/settings", {
+        data: {
+          entries: [
+            { key: `costguard.rate_cap_per_window.${agentId}`, value: null },
+          ],
+        },
+      });
+    }
   });
 });
