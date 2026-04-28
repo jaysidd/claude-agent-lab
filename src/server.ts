@@ -70,6 +70,18 @@ import { db } from "./memory.js";
 import { taskQueue, WORKER_ID } from "./taskQueueInstance.js";
 import type { Task as QueueTask } from "./taskQueue.js";
 import { costGuard } from "./costGuardInstance.js";
+import {
+  initScheduler,
+  cronEval,
+  cronPreview,
+} from "./schedulerInstance.js";
+import type {
+  EnqueueAdapter,
+  FireContext,
+  FireOutcome,
+  OnFire,
+  Schedule,
+} from "./scheduler.js";
 
 type TaskPriority = "low" | "medium" | "high";
 type ApiTaskStatus = "queued" | "active" | "done" | "error";
@@ -1069,6 +1081,299 @@ app.delete("/api/agents/:id", (req, res) => {
   planMode.delete(id);
   res.json({ ok: true });
 });
+
+// ============================================================================
+// C16a Scheduler — wiring + routes
+// ============================================================================
+//
+// The Scheduler primitive (src/scheduler.ts) is host-agnostic. We wire it here
+// with two callbacks:
+//   - enqueueAdapter: drops fires into the durable task queue (so they show up
+//     on the kanban and respect the same lease/retry semantics as manual tasks)
+//   - onFire: runs the actual SDK call, detects OAuth-dead errors, records the
+//     CostGuard ledger row, and updates the queue task's terminal state
+//
+// We intentionally don't extract this into a shared "agent runtime" module —
+// the chat / streaming / task-run paths each have their own quirks (sessions,
+// streaming cursor, plan mode toggling) and a premature abstraction would
+// bury those differences. Scheduler fires are fresh-context, no-resume,
+// fire-and-forget; that's distinct enough to keep here.
+
+const enqueueScheduledTask: EnqueueAdapter = (input) => {
+  const task = taskQueue.enqueue({
+    description: input.description,
+    agentId: input.agentId,
+    priority: PRIORITY_TO_NUM.medium,
+    metadata: input.metadata,
+  });
+  pruneCompletedTasks();
+  return task.id;
+};
+
+// Heuristic for distinguishing "OAuth session is dead" from "tool call failed
+// with an authorization-flavored error message." Two-layer defense:
+//
+//   1. Domain match: the error must mention an auth-system noun (oauth,
+//      claude login, credentials, anthropic api key) AND a failure verb
+//      (expired, invalid, failed, required, missing). Single-token matches
+//      like "expired" or "unauthorized" alone are too easy to trigger from
+//      benign tool errors ("file lease expired", "unauthorized scope").
+//   2. Position guard: the error must arrive BEFORE the first assistant
+//      message in the stream. Tool errors surface inside the agent loop,
+//      which cannot start without a working SDK transport, so an auth-
+//      flavored error from a tool can only surface after ≥ 1 assistant
+//      frame has been emitted.
+//
+// Both must hold to classify as oauth_dead. Anything else falls through to
+// the generic "error" outcome (which still increments consecutive_failures
+// and trips 3-strike auto-pause, just under a different paused_reason).
+//
+// The second top-level alternation matches the canonical CLI exhortation
+// "please run [`]claude login[`]" without requiring a separate failure-verb,
+// because the phrase itself is unambiguous enough to classify as auth-dead.
+// Captured during the C16a security audit (2026-04-28): the original single-
+// alternation regex missed three real-world phrasings ("Please run claude
+// login", "Please run `claude login`", "Please run `claude login` to refresh
+// credentials") because they had no failure-verb token *after* the domain
+// phrase. Without this, a legitimate OAuth-dead error would mis-classify as
+// generic and only auto-pause after 3 strikes — annoying, not a security gap,
+// but worth fixing while the regex is in scope. Strictly additive: all prior
+// true/false cases retained.
+const OAUTH_DEAD_PATTERN =
+  /(?:(?:oauth|claude\s*(?:code\s*)?login|anthropic\s*api[ -]?key|credentials).*(?:expired|invalid|failed|required|missing|not authenticated|please run)|please\s+run\s+`?claude\s*(?:code\s*)?login`?)/i;
+
+const fireScheduledTask: OnFire = async (
+  ctx: FireContext,
+): Promise<FireOutcome> => {
+  const agent = findAgent(ctx.agentId);
+  if (!agent) {
+    return { kind: "error", message: `agent ${ctx.agentId} not found` };
+  }
+
+  // Defense-in-depth — Scheduler.executeFire already enqueued before this
+  // callback fires, so we re-check CostGuard here in case the agent's cap
+  // was lowered between enqueue and fire.
+  const guard = costGuard.check(agent.id);
+  if (!guard.ok) {
+    // Roll the queued task forward to a clean cancelled terminal so the
+    // kanban shows the budget block. Use cancel() (not checkoutById+fail)
+    // because cancel is idempotent against terminal states and doesn't burn
+    // an attempt — this fire never reached the SDK.
+    taskQueue.cancel(ctx.taskId, guard.reason ?? "budget cap reached");
+    return {
+      kind: "budget_exhausted",
+      reason: guard.reason ?? "budget cap reached",
+    };
+  }
+
+  const checked = taskQueue.checkoutById(ctx.taskId, WORKER_ID);
+  if (!checked) {
+    return {
+      kind: "error",
+      message: `task ${ctx.taskId} no longer available for checkout`,
+    };
+  }
+
+  let finalText = "";
+  let usage: any;
+  let costUsd: number | undefined;
+  let apiKeySource: string | undefined;
+  let assistantMessageArrived = false;
+  let agentError: any | null = null;
+
+  const subAgents = subAgentsFor(agent.id);
+  const plan = planMode.get(agent.id) === true;
+  const fireCwd = ctx.cwd || currentCwd;
+
+  try {
+    for await (const msg of query({
+      prompt: ctx.prompt,
+      options: {
+        allowedTools: agent.allowedTools,
+        systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
+        cwd: fireCwd,
+        model: effectiveModel(agent.id),
+        ...(plan ? { permissionMode: "plan" as const } : {}),
+        ...(subAgents ? { agents: subAgents } : {}),
+      },
+    })) {
+      const anyMsg = msg as any;
+      if (anyMsg.type === "system" && anyMsg.subtype === "init") {
+        apiKeySource = anyMsg.apiKeySource ?? anyMsg.data?.apiKeySource;
+      }
+      if (anyMsg.type === "assistant") {
+        assistantMessageArrived = true;
+      }
+      if (anyMsg.type === "result") {
+        if (typeof anyMsg.result === "string") finalText = anyMsg.result;
+        if (anyMsg.usage) usage = anyMsg.usage;
+        if (typeof anyMsg.total_cost_usd === "number") costUsd = anyMsg.total_cost_usd;
+      }
+    }
+  } catch (err: any) {
+    agentError = err;
+  }
+
+  // Always record — failed fires still consume rate budget per CostGuard's
+  // documented contract.
+  costGuard.record(agent.id, {
+    inputTokens: usage?.input_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? 0,
+    costUsd: costUsd ?? 0,
+    isOAuth: apiKeySource === "none",
+  });
+
+  // Update queue terminal state. Defensive try/catch because the task row may
+  // have been reaped (long fire + lease expired) or hard-deleted out from
+  // under us. Both paths land on UPDATE-matches-zero which the queue surfaces
+  // as a throw — we just log and move on.
+  try {
+    if (agentError) {
+      taskQueue.fail(ctx.taskId, WORKER_ID, {
+        message: agentError?.message ?? String(agentError),
+      });
+    } else {
+      taskQueue.complete(ctx.taskId, WORKER_ID, finalText);
+    }
+  } catch (err: any) {
+    console.warn(
+      `[scheduler ${ctx.scheduleId}] queue terminal update failed: ${err?.message ?? err}`,
+    );
+  }
+
+  if (agentError) {
+    const message = agentError?.message ?? String(agentError);
+    if (!assistantMessageArrived && OAUTH_DEAD_PATTERN.test(message)) {
+      return { kind: "oauth_dead", message };
+    }
+    return { kind: "error", message };
+  }
+
+  return { kind: "success" };
+};
+
+const scheduler = initScheduler(enqueueScheduledTask, fireScheduledTask);
+scheduler.start();
+
+// --- Routes ---
+
+function toApiSchedule(s: Schedule) {
+  return s; // wire shape == internal shape for v1; UI computes relative times
+}
+
+app.get("/api/schedules", (_req, res) => {
+  res.json(scheduler.list().map(toApiSchedule));
+});
+
+app.post("/api/schedules", (req, res) => {
+  const { agentId, prompt, cron, cwd, enabled } = req.body ?? {};
+  if (!findAgent(agentId)) {
+    return res.status(400).json({ error: "unknown agent" });
+  }
+  try {
+    const s = scheduler.create({
+      agentId,
+      prompt,
+      cron,
+      cwd: cwd === undefined ? null : cwd,
+      enabled,
+    });
+    res.json(toApiSchedule(s));
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? "invalid schedule" });
+  }
+});
+
+app.get("/api/schedules/:id", (req, res) => {
+  const s = scheduler.get(req.params.id);
+  if (!s) return res.status(404).json({ error: "not found" });
+  res.json(toApiSchedule(s));
+});
+
+app.patch("/api/schedules/:id", (req, res) => {
+  const patch = req.body ?? {};
+  if (patch.agentId !== undefined && !findAgent(patch.agentId)) {
+    return res.status(400).json({ error: "unknown agent" });
+  }
+  try {
+    const s = scheduler.update(req.params.id, patch);
+    if (!s) return res.status(404).json({ error: "not found" });
+    res.json(toApiSchedule(s));
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? "invalid update" });
+  }
+});
+
+app.delete("/api/schedules/:id", (req, res) => {
+  const ok = scheduler.delete(req.params.id);
+  if (!ok) return res.status(404).json({ error: "not found" });
+  res.json({ ok: true });
+});
+
+app.post("/api/schedules/:id/run-now", async (req, res) => {
+  const sched = scheduler.get(req.params.id);
+  if (!sched) return res.status(404).json({ error: "not found" });
+  // Don't await the fire — the SDK call streams a full reply and we don't
+  // want to hold the HTTP request open for that. fireNow's synchronous prefix
+  // (enqueue + last_task_id record) runs to completion before the first
+  // await inside executeFire, so the post-yield `scheduler.get()` below sees
+  // the populated lastTaskId. Catch the void'd promise so a rejected
+  // executeFire (e.g., enqueue throw) doesn't surface as an unhandled
+  // rejection — operational errors are already logged inside executeFire's
+  // own try/catch on the SDK call.
+  scheduler.fireNow(req.params.id).catch((err) => {
+    console.warn(
+      `[scheduler ${req.params.id}] fireNow rejected: ${err?.message ?? err}`,
+    );
+  });
+  // Yield once so the synchronous enqueue/UPDATE inside fireNow runs before
+  // we read the schedule back. better-sqlite3 is sync, so a single macrotask
+  // tick is enough to drain the microtask queue.
+  await new Promise((r) => setTimeout(r, 0));
+  const fresh = scheduler.get(req.params.id);
+  res.json({
+    ok: true,
+    taskId: fresh?.lastTaskId ?? null,
+    schedule: fresh ? toApiSchedule(fresh) : null,
+  });
+});
+
+app.post("/api/schedules/:id/pause", (req, res) => {
+  const before = scheduler.get(req.params.id);
+  if (!before) return res.status(404).json({ error: "not found" });
+  if (!before.enabled) {
+    return res.json(toApiSchedule(before));
+  }
+  const after = scheduler.pause(req.params.id, "manual");
+  res.json(after ? toApiSchedule(after) : null);
+});
+
+app.post("/api/schedules/:id/resume", (req, res) => {
+  const after = scheduler.resume(req.params.id);
+  if (!after) return res.status(404).json({ error: "not found" });
+  res.json(toApiSchedule(after));
+});
+
+app.post("/api/cron/preview", (req, res) => {
+  const cron = req.body?.cron;
+  if (typeof cron !== "string" || !cron.trim()) {
+    return res.status(400).json({ valid: false, error: "cron required" });
+  }
+  if (cron.length > 100) {
+    return res.status(400).json({ valid: false, error: "cron too long" });
+  }
+  try {
+    const next = cronPreview(cron, Date.now(), 3);
+    res.json({ valid: true, next });
+  } catch (err: any) {
+    res.status(400).json({
+      valid: false,
+      error: (err?.message ?? "invalid cron").split("\n")[0],
+    });
+  }
+});
+
+// ============================================================================
 
 const PORT = Number(process.env.PORT ?? 3333);
 const HOST = process.env.HOST ?? "127.0.0.1";
