@@ -131,6 +131,7 @@ When wrapping a session, spawn Performance Analyst and Security Analyst as backg
 - **Commit early and often.** After every successful feature that passes a smoke test, commit.
 - Never batch unrelated changes.
 - End every commit with `Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>`.
+- **"Commit and push" means the full publish flow.** When the user says "commit and push," they mean: stage → commit → push → open PR → merge → delete branch. The hook blocks direct-to-main, which is by design — use a feature branch, push it, open the PR via `gh pr create`, merge it (typically `--squash` or `--merge`), then delete the local + remote branch. Don't stop at "pushed to a feature branch" and wait for follow-up; the user does not consider that "done."
 
 ---
 
