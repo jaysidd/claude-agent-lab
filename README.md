@@ -3,11 +3,11 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-22_passing-6ee7b7)](./tests)
+[![Tests](https://img.shields.io/badge/tests-35_passing-6ee7b7)](./tests)
 
-A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. Task board with Haiku-powered auto-routing. Token-by-token streaming. Folder scoping. `@file` and `/command` autocomplete. Persistent SQLite memory. **Conversation history with restore-and-resume.** OAuth-aware **cost & token tracking.** Markdown / JSON conversation export. Settings UI for integrations. Voice I/O via [WhisprDesk](https://whisprdesk.com/).
+A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. **Durable SQLite-backed task queue** with atomic checkout, lease-based crash recovery, and Haiku auto-routing. **Per-agent budget caps** (cost + rate) enforced before every SDK call. Token-by-token streaming. Folder scoping. `@file` and `/command` autocomplete. Persistent SQLite memory. **Conversation history with restore-and-resume.** OAuth-aware **cost & token tracking.** Markdown / JSON conversation export. Settings UI for integrations. Voice I/O via [WhisprDesk](https://whisprdesk.com/).
 
-All in ~2,500 lines of hand-written code — because most of the work is already inside the SDK.
+All in ~7,500 lines of hand-written code — because most of the work is already inside the SDK.
 
 ![Command Center — overview](docs/screenshots/01-overview.png)
 
@@ -38,6 +38,8 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Folder scoping](#folder-scoping) | `cwd` |
 | [Per-agent model selection](#per-agent-model-selection) | `model: "claude-opus-4-7" \| "claude-sonnet-4-6" \| "claude-haiku-4-5"` |
 | [Task queue with auto-routing](#task-queue-with-auto-routing) | One-shot Haiku `query()` as a classifier |
+| [Durable task queue (SQLite + atomic checkout)](#durable-task-queue) | Tasks survive restart; lease-based crash recovery; concurrent-safe checkout |
+| [Budget caps (CostGuard)](#budget-caps-costguard) | Preflight `check()` before every `query()`; cost cap + rate cap; OAuth-aware |
 | [Markdown rendering](#markdown-rendering) | Not SDK — `marked` + `DOMPurify` + `highlight.js` on completed replies |
 | [Persistent memory (SQLite)](#persistent-memory-sqlite) | Injected into `systemPrompt` on every call |
 | [Session history + restore](#session-history--restore) | Every conversation persisted to SQLite; click to resume any past session |
@@ -130,6 +132,31 @@ Click **Tasks** in the header. Describe a task, set priority, hit **Create**. A 
 Auto-routing accepts an optional `agentId` override if you'd rather pick the specialist yourself.
 
 **Why Haiku for classification?** It's fast, cheap, and the task is well-bounded. The main-thread agents use Sonnet or Opus; Haiku handles the decisions about where to send the work.
+
+---
+
+### Durable task queue
+
+Tasks live in SQLite (`data/lab.db` → `tasks` table), not in an in-memory `Map`. Restart the server mid-run and every task — queued, checked-out, done — comes back exactly as you left it. The queue's primitive lives in [`src/taskQueue.ts`](src/taskQueue.ts) as a **host-agnostic module** (zero Express / SDK imports) so it lifts cleanly into any Node project.
+
+What "durable" actually buys you here:
+
+- **Atomic checkout via `BEGIN IMMEDIATE` + `RETURNING *`.** Two workers can race for the same task and exactly one wins; the loser gets back a 409-shaped "already checked out." No double-runs.
+- **Lease-based crash recovery.** Each checkout claims a lease (default 5 min). If the worker crashes — process killed, OS reboot, anything — the lease expires and `reapExpired()` returns the task to `queued` for retry, up to `maxAttempts`.
+- **5-state machine.** `queued → checked_out → done | failed | cancelled`, with lease-expired loopback to `queued`. The `running` state from the C03 in-memory version was dropped — it was a worker-side concern, not a queue-side one.
+- **Worker fingerprint baked in.** Each row records the `worker_id` (`{hostname}:{pid}:{uuid}`) of whoever checked it out, for forensics on which process did what.
+
+```ts
+// The queue API (src/taskQueue.ts) — same primitive that backs the kanban UI
+const id = queue.enqueue({ description, agentId, priority, metadata });
+const claim = queue.checkout({ workerId, leaseSeconds: 300 }); // atomic
+queue.complete(id, { result });             // → done
+queue.fail(id, { error, retryable: true }); // → queued (if attempts left) or failed
+queue.cancel(id);                            // → cancelled (terminal)
+queue.reapExpired();                         // sweep crashed workers
+```
+
+The kanban UI looks identical to the C03 version — same `Queued / Active / Done` columns, same priority chips, same Run button. The change is entirely in the backing store.
 
 ---
 
@@ -263,6 +290,60 @@ Per-agent state. Switching plan mode clears that agent's session (the SDK treats
 
 ---
 
+### Budget caps (CostGuard)
+
+![Settings → Budget (CostGuard)](docs/screenshots/15-settings-budget.png)
+
+CostGuard is a **preflight-and-record primitive** that runs before every `query()` call: chat, streaming chat, and scheduled task fires all funnel through it. If the active agent is over its window-to-date budget, the request returns a structured `429`-shaped response *before* a single SDK token is spent.
+
+Two cap axes, both per-agent (with global defaults):
+
+- **Cost cap** — monthly USD ceiling. **OAuth providers bypass this** — Max plan is flat-rate, so dollar accounting against a Max session is nonsense. API-key sessions enforce it.
+- **Rate cap** — requests-per-window ceiling. **Always enforced**, regardless of provider, because rate-limit posture matters even when the cost is $0.
+
+The signature was [locked across two projects](backlog.md) (Command Center + the multi-provider sister app [Clawless](https://clawless.ai/)) so the same `src/costGuard.ts` lifts mechanically into either codebase:
+
+```ts
+costGuard.check(agentId: string, estimatedTokens?: number): {
+  ok: boolean;
+  reason?: string;            // human-readable rejection text
+  capType?: "cost" | "rate";  // which cap tripped
+  remaining?: number;         // dollars (cost) or requests (rate)
+}
+```
+
+Server-side enforcement only — no client influence on the verdict. Caps live in the same SQLite `settings` table as the rest of the operator config; configurable per-agent under "Budget (CostGuard)" in the Settings modal. A blank or `0` cap means "unset" — to genuinely pause an agent, set its rate cap to `1` (the first call exhausts it).
+
+Every successful or failed call lands in a `cost_ledger` row with `(agent_id, occurred_at, cost_usd, tokens_in, tokens_out, is_oauth)`. The `is_oauth` flag is the data-driven OAuth-bypass: cost SUMs filter rows where `is_oauth=1`, so bypass is automatic without env-var coupling.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant UI
+  participant Srv as /api/chat[/stream]
+  participant CG as costGuard
+  participant SDK as query()
+  participant Ledger as cost_ledger (SQLite)
+
+  UI->>Srv: POST {agentId, message}
+  Srv->>CG: check(agentId)
+  alt over cap
+    CG-->>Srv: {ok:false, capType:"cost"|"rate", reason, remaining:0}
+    Srv-->>UI: 429 — budget exhausted (no SDK call made)
+  else under cap
+    CG-->>Srv: {ok:true, remaining:N}
+    Srv->>SDK: query({...})
+    SDK-->>Srv: result + usage + apiKeySource
+    Srv->>CG: record({agentId, costUsd, tokens, isOauth})
+    CG->>Ledger: INSERT row
+    Srv-->>UI: reply
+  end
+```
+
+`GET /api/costguard/status?agentId=X` returns `{rateUsed, rateRemaining, costUsedThisMonth, costRemaining}` — useful for surfacing per-agent budget chips in the UI later. Hot-path overhead measured at ~7 µs p50 / ~15 µs p99, invisible against LLM latency.
+
+---
+
 ### Settings panel
 
 ![Settings modal](docs/screenshots/10-settings-modal.png)
@@ -270,6 +351,7 @@ Per-agent state. Switching plan mode clears that agent's session (the SDK treats
 A ⚙️ **Settings** button in the header opens a modal backed by a SQLite `settings` table (`key`, `value`, `is_secret`, `updated_at`). Every integration surfaces here instead of being hidden behind `.env` edits. Current sections:
 
 - **WhisprDesk** — Gateway URL + Bearer token + live **Test connection** button
+- **Budget (CostGuard)** — cost cap (monthly USD) + rate cap (requests-per-window) + window length. Global defaults plus per-agent overrides. See [Budget caps](#budget-caps-costguard).
 - **Telegram bridge** *(coming soon)* — the fields render with a disabled state and a "coming soon" badge until the C05 bridge ships; saving is deliberately blocked so no one gets the broken-promise experience
 
 Secrets never round-trip to the browser: the UI shows a masked preview (`••••c123`), leaving a secret field blank keeps the existing value, and the raw token stays server-side for every proxied request. Values saved in the DB override matching env vars automatically — you can still paste tokens into `.env` for headless deploys.
@@ -372,14 +454,19 @@ Browser (vanilla JS)  →  Express server (:3333)  →  Claude Agent SDK  →  C
 
 **One process, one port.** No Electron, no IPC bridge, no separate renderer build. `tsx` runs TypeScript directly. Static files serve from `/public`.
 
-**State** is in-memory (restart = fresh). Persistent storage is on the backlog ([`C04`](backlog.md)).
+**State** lives in two layers: **SQLite at `data/lab.db`** (persistent across restarts) for everything that should survive a reboot, plus a small **in-memory** layer for per-process session pointers. The DB is gitignored — nothing leaves your laptop.
 
-| Map | Type | Purpose | Resets on |
-|---|---|---|---|
-| `sessionByAgent` | `Map<agentId, sessionId>` | SDK session id for `resume:` | reset, cwd change, model override |
-| `modelOverride` | `Map<agentId, string>` | per-agent model choice vs default | POST `/api/model/:agentId` with empty body |
-| `tasks` | `Map<taskId, Task>` | task board state | per-id DELETE; capped at 50 completed |
-| `currentCwd` | `string` | folder passed as `cwd` to every `query()` | POST `/api/cwd` |
+| Where | Name | Purpose |
+|---|---|---|
+| In-memory | `sessionByAgent: Map<agentId, sessionId>` | SDK session id for `resume:` (cleared on reset, cwd change, model override) |
+| In-memory | `modelOverride: Map<agentId, string>` | Per-agent model override vs `agents.ts` default |
+| In-memory | `currentCwd: string` | Folder passed as `cwd` to every `query()` |
+| SQLite | `tasks` | Durable task queue — atomic checkout, leases, retries (see [Durable task queue](#durable-task-queue)) |
+| SQLite | `cost_ledger` | Per-call usage rows — backs CostGuard's cost + rate windows (see [Budget caps](#budget-caps-costguard)) |
+| SQLite | `sessions` + `session_messages` | Conversation history; restore via `resume:` (see [Session history](#session-history--restore)) |
+| SQLite | `memories` | Persistent memory injected into the system prompt |
+| SQLite | `settings` | Operator config (WhisprDesk creds, budget caps, etc.) — overrides env vars |
+| SQLite | `custom_agents` | User-spawned agents merged with built-ins via the agent registry |
 
 Full design notes in [`architecture.md`](architecture.md).
 
@@ -548,27 +635,40 @@ sequenceDiagram
 
 ---
 
-### Task state machine
+### Task state machine (durable queue)
 
 ```mermaid
 stateDiagram-v2
-  [*] --> queued: POST /api/task
-  queued --> active: POST /api/task/:id/run
-  active --> done: agent returned result
-  active --> error: query() threw
-  queued --> [*]: DELETE
-  done --> [*]: DELETE or auto-prune (>50 completed)
-  error --> [*]: DELETE
+  [*] --> queued: enqueue
+  queued --> checked_out: atomic checkout
+  checked_out --> done: complete
+  checked_out --> failed: fail — no retries left
+  checked_out --> queued: fail with retry OR reapExpired
+  queued --> cancelled: cancel
+  checked_out --> cancelled: cancel
+  done --> [*]: DELETE or prune
+  failed --> [*]: DELETE
+  cancelled --> [*]: DELETE
 
   note right of queued
-    description, priority, assignedAgent
-    createdAt
+    priority, agent_id
+    attempts, max_attempts
+    metadata_json up to 64 KB
+    scheduled_for
+  end note
+
+  note right of checked_out
+    + worker_id
+    + leased_until
+    + started_at
   end note
 
   note right of done
-    + startedAt, completedAt, result
+    + completed_at, result_text
   end note
 ```
+
+The 5-state enum is the wire shape across both Command Center and Clawless's task queue (B54). The `running` state from C03's in-memory version was dropped — it was a worker-side concern, not queue-side. `failed` is reachable only after `attempts ≥ max_attempts`; otherwise `fail()` loops back to `queued`.
 
 ---
 
@@ -630,13 +730,18 @@ flowchart LR
 | `/api/memories` | GET | `?agentId=` | `Array<Memory>` (global + matching agent if provided) |
 | `/api/memories` | POST | `{content, agentId?, category?}` | `Memory` |
 | `/api/memories/:id` | DELETE | — | `{ok}` |
-| `/api/memories` | DELETE | — | `{ok, cleared}` (wipes all memories) |
-| `/api/plan/:agentId` | GET | — | `{agentId, enabled}` |
 | `/api/plan/:agentId` | POST | `{enabled: boolean}` | `{agentId, enabled}` |
-| `/api/tasks` | GET | — | `Array<Task>` |
+| `/api/tasks` | GET | — | `Array<Task>` (durable, SQLite-backed) |
 | `/api/task` | POST | `{description, priority?, agentId?}` | `Task` |
-| `/api/task/:id/run` | POST | — | `Task` (updated) |
-| `/api/task/:id` | DELETE | — | `{ok}` |
+| `/api/task/:id/run` | POST | — | `Task` (atomic checkout, then runs) |
+| `/api/task/:id` | DELETE | — | `{ok}` (terminal-state only; non-terminal returns 409) |
+| `/api/costguard/status` | GET | `?agentId=` | `{rateUsed, rateRemaining, costUsedThisMonth, costRemaining}` |
+| `/api/settings` | GET | — | `{schema, values, envFallbacks}` (secrets masked) |
+| `/api/settings` | POST | `{entries: [{key, value, isSecret}]}` | `{ok, changed}` |
+| `/api/agents` (POST) | POST | `{name, emoji, accent, description, systemPrompt, model, allowedTools, isRouter?}` | New custom agent |
+| `/api/agents/:id` | GET | — | Single agent (built-in or custom) |
+| `/api/agents/:id` | PATCH | partial update | Custom only — built-ins return 400 |
+| `/api/agents/:id` | DELETE | — | Custom only — built-ins return 400 |
 | `/api/whisprdesk/status` | GET | — | `{configured, reachable?, upstream?, error?}` |
 | `/api/whisprdesk/capabilities` | GET | — | WhisprDesk's `/v1/capabilities` proxied |
 | `/api/whisprdesk/transcribe` | POST | raw audio body (≤30 MB) | `{text, provider, model, durationMs}` |
@@ -654,26 +759,39 @@ flowchart LR
 ```
 claude-agent-lab/
 ├── src/
-│   ├── server.ts        # Express + SDK glue (~300 LOC). All /api/* routes.
-│   ├── agents.ts        # Four agent configs + sub-agent helper (~120 LOC)
-│   └── hello.ts         # 15-line URL-summarizer smoke test
+│   ├── server.ts             # Express + SDK glue (~1,080 LOC). All /api/* routes.
+│   ├── agents.ts             # Four built-in agent configs + sub-agent helper
+│   ├── agentRegistry.ts      # Merges built-ins with SQLite-backed custom agents
+│   ├── customAgents.ts       # CRUD for user-spawned agents
+│   ├── memory.ts             # Persistent memory: CRUD + system-prompt injection
+│   ├── sessions.ts           # Conversation history: persist + resume
+│   ├── settings.ts           # Operator config (Settings modal backing)
+│   ├── taskQueue.ts          # Durable queue primitive (host-agnostic, ~575 LOC)
+│   ├── taskQueueInstance.ts  # Singleton bootstrap with worker fingerprint
+│   ├── costGuard.ts          # Budget preflight primitive (host-agnostic, ~190 LOC)
+│   ├── costGuardInstance.ts  # Singleton bootstrap reading caps from settings
+│   └── hello.ts              # 15-line URL-summarizer smoke test
 ├── public/
-│   ├── index.html       # UI markup
-│   ├── style.css        # Dark command-center theme
-│   └── app.js           # Vanilla-JS frontend (~620 LOC) — no framework
+│   ├── index.html            # UI markup
+│   ├── style.css             # Dark command-center theme
+│   └── app.js                # Vanilla-JS frontend (~2,450 LOC) — no framework
+├── data/
+│   └── lab.db                # SQLite — gitignored, on-disk only
 ├── tests/
-│   ├── smoke.spec.ts    # 7 offline Playwright tests
-│   └── chat.spec.ts     # 2 @engine tests that hit the real SDK
+│   ├── smoke.spec.ts         # 7 baseline offline Playwright tests
+│   ├── features.spec.ts      # 26 feature-level tests (queue, CostGuard, etc.)
+│   └── chat.spec.ts          # 2 @engine tests that hit the real SDK
 ├── docs/
-│   ├── case-studies/    # What-we-learned-while-building notes
-│   ├── audits/          # Performance + Security audit reports
-│   └── screenshots/     # The images used in this README
+│   ├── case-studies/         # What-we-learned-while-building notes
+│   ├── audits/               # Per-feature Performance + Security audit reports
+│   └── screenshots/          # The images used in this README
 ├── scripts/
-│   └── screenshot.mjs   # Playwright script that captures the README images
-├── CLAUDE.md            # Project conventions (six-role dev team, etc.)
-├── architecture.md      # Technical architecture
-├── backlog.md           # Sequential feature backlog (C##)
-└── (.notes/             # Private, gitignored — handoffs & draft posts)
+│   ├── launch-command-center.command  # Double-clickable macOS launcher
+│   └── screenshot.mjs        # Playwright script that captures README images
+├── CLAUDE.md                 # Project conventions (six-role dev team, etc.)
+├── architecture.md           # Technical architecture
+├── backlog.md                # Sequential feature backlog (C##)
+└── (.notes/                  # Private, gitignored — handoffs & draft posts)
 ```
 
 ---
@@ -683,9 +801,9 @@ claude-agent-lab/
 ```bash
 npm run serve        # start the server (also `npm start`)
 npm run hello        # original URL-summarizer smoke test
-npm run test:smoke   # 7 offline UI tests (no SDK calls, ~2 seconds)
+npm run test:smoke   # 33 offline tests (no SDK calls, ~5 seconds)
 npm run test:engine  # 2 end-to-end tests against the real SDK (~15 seconds)
-npm test             # all tests
+npm test             # all tests (35 total)
 
 node scripts/screenshot.mjs   # regenerate the README screenshots (needs server running)
 ```
@@ -712,17 +830,27 @@ This repo is **not** a product. If you turn it into one, switch to API keys and 
 
 ## What's on the backlog
 
-The current implementation covers F1–F7 foundation + C01–C15 (streaming, delegation, tasks, markdown, memory, slash commands + popover, plan mode, WhisprDesk, Settings, custom agents). See [`backlog.md`](backlog.md) for the full sequential list. Top candidates for the next sessions:
+The current implementation covers F1–F7 foundation, C01–C15 (streaming, delegation, tasks, markdown, memory, slash commands, plan mode, WhisprDesk, Settings, custom agents), A1–A3 (cost tracking, session history, conversation export), and the first two sub-features of the **C16 "Autonomous Agent Firm" epic**: durable task queue (C16b) and budget caps (C16c). See [`backlog.md`](backlog.md) for the full sequential list.
 
-- **C05 Telegram bridge** — Settings fields are already live (disabled pending code). Need: long-poll listener, allowlist enforcement, routing to selected agent. Unblocks "agents on your phone."
-- **C12 File rewind UI** — requires refactoring the chat lifecycle to streaming-input mode so the SDK `Query` object stays alive across requests and `Query.rewindFiles(userMessageId)` can be invoked from a button on each user message.
-- **Cost & token tracking** — read usage from the SDK's `ResultMessage` and surface per-turn + session-total token/cost.
-- **Telegram / Discord bridge** — same engine, additional interface; pairs with slash commands already in place.
-- **Session history sidebar** — persist conversations across restarts (memory exists, chats don't yet).
-- **AskUserQuestion inline UI** — surface the SDK's built-in tool for mid-turn clarification as an interactive card.
+**Active epic — C16: Autonomous Agent Firm** (Phase 2: agents that run while you sleep)
+
+| Sub-feature | Status |
+|---|---|
+| C16b Durable task queue | ✅ Shipped — atomic checkout, lease recovery, host-agnostic primitive |
+| C16c CostGuard budget caps | ✅ Shipped — preflight `check()` with cost + rate axes, OAuth-aware |
+| **C16a Scheduler** | ⭐ Next — cron-style triggers; wires `taskQueue.checkout()` into a tick loop, OAuth-rotation healthcheck |
+| **C16d Per-task approval gates** | Pending — `requires_approval` per task, pause-and-wait at `PreToolUse` hook |
+
+**Smaller items on the bench**
+
+- **C05 Telegram bridge** — Settings fields already live (disabled pending code). Need long-poll listener, chat-id allowlist, agent-routing.
+- **C12 File rewind UI** — needs streaming-input refactor so the SDK `Query` object stays alive across requests and `Query.rewindFiles(userMessageId)` can fire from a button.
+- **AskUserQuestion inline UI** — surface the SDK's built-in mid-turn clarification tool as an interactive card.
 - **MCP configuration UI** — point at an external MCP server and have its tools light up for a chosen agent.
+- **Keyboard shortcuts hub** — Cmd+K agent switcher, Cmd+T tasks, Cmd+; settings.
+- **Context pinning per agent** — pin a file or snippet that auto-prepends to every turn for that agent.
 
-Ideas worth reading about that landed in the "Future — not scheduled" list: voice I/O (Pipecat / Gemini Live), "council mode" (multi-agent debate + synthesizer), multi-pane chat, hook inspector, keyboard shortcuts, onboarding tour.
+Further-out ideas (full list in `backlog.md` → "Future — not scheduled"): "council mode" multi-agent debate + synthesizer, multi-pane chat, hook inspector timeline, Skills panel, multiple workspaces, onboarding tour.
 
 ---
 
