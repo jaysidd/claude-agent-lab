@@ -68,6 +68,9 @@
           <button id="tasks-btn" type="button" title="Open task board">
             📋 Tasks <span id="tasks-count" class="tasks-count">0</span>
           </button>
+          <button id="schedules-btn" type="button" title="Cron-style scheduled agent runs">
+            🕒 Schedules <span id="schedules-count" class="tasks-count">0</span>
+          </button>
           <label id="plan-toggle" title="Plan mode: read-only agent run (no tool execution)">
             <input id="plan-checkbox" type="checkbox" />
             <span>Plan</span>
@@ -297,6 +300,52 @@
               <div class="task-list" id="col-done-list"></div>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="schedules-modal" class="modal-overlay hidden">
+      <div class="modal modal-wide">
+        <header class="modal-header">
+          <div class="modal-title">🕒 Scheduled Agent Runs</div>
+          <button id="schedules-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="modal-intro">
+            Schedules wake an agent on a cron expression. Each fire enqueues a
+            task with fresh context (no session resume) and runs through CostGuard
+            preflight. If the OAuth session dies, the schedule auto-pauses
+            instead of looping errors. After 3 consecutive non-OAuth errors
+            it auto-pauses too.
+          </p>
+          <div class="task-create">
+            <textarea
+              id="schedule-prompt"
+              rows="2"
+              placeholder="Prompt the agent runs each fire — e.g. 'Review overnight specialist outputs and queue today's research cycle'"
+            ></textarea>
+            <div class="task-create-row">
+              <select id="schedule-agent"></select>
+              <input
+                id="schedule-cron"
+                type="text"
+                placeholder="0 9 * * *"
+                style="flex: 1; min-width: 0"
+              />
+              <button id="schedule-create-btn" class="btn-primary" type="button">
+                Add schedule
+              </button>
+            </div>
+            <div class="schedule-presets">
+              <button data-cron="0 * * * *" type="button">Every hour</button>
+              <button data-cron="0 */6 * * *" type="button">Every 6 hours</button>
+              <button data-cron="0 9 * * *" type="button">Daily 9am</button>
+              <button data-cron="0 17 * * 1-5" type="button">Weekdays 5pm</button>
+              <button data-cron="0 9 * * 1" type="button">Mon 9am</button>
+            </div>
+            <div id="schedule-preview" class="schedule-preview"></div>
+          </div>
+          <div id="schedules-list"></div>
         </div>
       </div>
     </div>

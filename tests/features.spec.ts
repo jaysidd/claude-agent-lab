@@ -484,6 +484,204 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     }
   });
 
+  test("C16a — POST /api/schedules creates a schedule with all fields", async ({
+    request,
+  }) => {
+    const r = await request.post("http://localhost:3333/api/schedules", {
+      data: {
+        agentId: "main",
+        prompt: "QA test schedule",
+        cron: "0 9 * * *",
+      },
+    });
+    expect(r.status()).toBe(200);
+    const sched = await r.json();
+    try {
+      expect(sched.id).toBeTruthy();
+      expect(sched.agentId).toBe("main");
+      expect(sched.prompt).toBe("QA test schedule");
+      expect(sched.cron).toBe("0 9 * * *");
+      expect(sched.enabled).toBe(true);
+      expect(sched.pausedReason).toBe(null);
+      expect(typeof sched.nextFireAt).toBe("number");
+      expect(sched.nextFireAt).toBeGreaterThan(Date.now());
+      expect(sched.consecutiveFailures).toBe(0);
+      expect(sched.lastFiredAt).toBe(null);
+      expect(sched.lastTaskId).toBe(null);
+      expect(sched.lastStatus).toBe(null);
+    } finally {
+      await request.delete(`http://localhost:3333/api/schedules/${sched.id}`);
+    }
+  });
+
+  test("C16a — POST /api/schedules rejects invalid cron with 400", async ({
+    request,
+  }) => {
+    const r = await request.post("http://localhost:3333/api/schedules", {
+      data: {
+        agentId: "main",
+        prompt: "x",
+        cron: "TOTALLY NOT A CRON",
+      },
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.error).toMatch(/invalid cron/i);
+  });
+
+  test("C16a — POST /api/schedules rejects unknown agent with 400", async ({
+    request,
+  }) => {
+    const r = await request.post("http://localhost:3333/api/schedules", {
+      data: {
+        agentId: "nobody-here",
+        prompt: "x",
+        cron: "0 9 * * *",
+      },
+    });
+    expect(r.status()).toBe(400);
+    expect((await r.json()).error).toBe("unknown agent");
+  });
+
+  test("C16a — POST /api/schedules rejects empty prompt and oversize cron", async ({
+    request,
+  }) => {
+    // Empty prompt
+    const r1 = await request.post("http://localhost:3333/api/schedules", {
+      data: { agentId: "main", prompt: "", cron: "0 9 * * *" },
+    });
+    expect(r1.status()).toBe(400);
+
+    // Oversize cron (> 100 char cap)
+    const r2 = await request.post("http://localhost:3333/api/schedules", {
+      data: {
+        agentId: "main",
+        prompt: "x",
+        cron: "0 ".repeat(60) + "9 * * *",
+      },
+    });
+    expect(r2.status()).toBe(400);
+  });
+
+  test("C16a — schedule persists to SQLite and is readable across DB handles", async ({
+    request,
+  }) => {
+    const r = await request.post("http://localhost:3333/api/schedules", {
+      data: { agentId: "main", prompt: "persist test", cron: "0 12 * * *" },
+    });
+    const sched = await r.json();
+    try {
+      // Open a fresh DB handle (proxies "what would happen on restart") and
+      // verify the row is on disk, not in-memory.
+      const db = new Database(LAB_DB, { readonly: true });
+      const row = db
+        .prepare("SELECT id, prompt, cron, enabled FROM schedules WHERE id = ?")
+        .get(sched.id) as
+        | { id: string; prompt: string; cron: string; enabled: number }
+        | undefined;
+      db.close();
+
+      expect(row).toBeTruthy();
+      expect(row!.id).toBe(sched.id);
+      expect(row!.prompt).toBe("persist test");
+      expect(row!.cron).toBe("0 12 * * *");
+      expect(row!.enabled).toBe(1);
+    } finally {
+      await request.delete(`http://localhost:3333/api/schedules/${sched.id}`);
+    }
+  });
+
+  test("C16a — pause/resume round-trip", async ({ request }) => {
+    const created = await (
+      await request.post("http://localhost:3333/api/schedules", {
+        data: { agentId: "main", prompt: "pause test", cron: "0 9 * * *" },
+      })
+    ).json();
+    try {
+      // Pause
+      const paused = await (
+        await request.post(
+          `http://localhost:3333/api/schedules/${created.id}/pause`,
+        )
+      ).json();
+      expect(paused.enabled).toBe(false);
+      expect(paused.pausedReason).toBe("manual");
+
+      // Resume — re-derives next_fire_at from now() so a long-paused
+      // schedule doesn't fire-storm. Verify it's still in the future.
+      const resumed = await (
+        await request.post(
+          `http://localhost:3333/api/schedules/${created.id}/resume`,
+        )
+      ).json();
+      expect(resumed.enabled).toBe(true);
+      expect(resumed.pausedReason).toBe(null);
+      expect(resumed.consecutiveFailures).toBe(0);
+      expect(resumed.nextFireAt).toBeGreaterThan(Date.now());
+    } finally {
+      await request.delete(`http://localhost:3333/api/schedules/${created.id}`);
+    }
+  });
+
+  test("C16a — DELETE on missing schedule returns 404", async ({ request }) => {
+    const r = await request.delete(
+      "http://localhost:3333/api/schedules/does-not-exist",
+    );
+    expect(r.status()).toBe(404);
+  });
+
+  test("C16a — POST /api/cron/preview returns 3 future fires for a valid cron", async ({
+    request,
+  }) => {
+    const r = await request.post("http://localhost:3333/api/cron/preview", {
+      data: { cron: "0 */6 * * *" },
+    });
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.valid).toBe(true);
+    expect(Array.isArray(body.next)).toBe(true);
+    expect(body.next).toHaveLength(3);
+    // All three must be in the future and strictly increasing.
+    const now = Date.now();
+    expect(body.next[0]).toBeGreaterThan(now);
+    expect(body.next[1]).toBeGreaterThan(body.next[0]);
+    expect(body.next[2]).toBeGreaterThan(body.next[1]);
+  });
+
+  test("C16a — POST /api/cron/preview rejects invalid cron with 400", async ({
+    request,
+  }) => {
+    const r = await request.post("http://localhost:3333/api/cron/preview", {
+      data: { cron: "junk" },
+    });
+    expect(r.status()).toBe(400);
+    const body = await r.json();
+    expect(body.valid).toBe(false);
+    expect(typeof body.error).toBe("string");
+  });
+
+  test("C16a — PATCH cron updates next_fire_at", async ({ request }) => {
+    const created = await (
+      await request.post("http://localhost:3333/api/schedules", {
+        data: { agentId: "main", prompt: "patch test", cron: "0 9 * * *" },
+      })
+    ).json();
+    try {
+      const patched = await (
+        await request.patch(
+          `http://localhost:3333/api/schedules/${created.id}`,
+          { data: { cron: "0 10 * * *" } },
+        )
+      ).json();
+      expect(patched.cron).toBe("0 10 * * *");
+      // next_fire_at is re-derived from now() — almost certainly different
+      // unless the test runs at exactly :00:00 UTC.
+      expect(patched.nextFireAt).not.toBe(created.nextFireAt);
+    } finally {
+      await request.delete(`http://localhost:3333/api/schedules/${created.id}`);
+    }
+  });
+
   test("C16c — cap value of 0 is treated as unset", async ({ request }) => {
     // M2 fix: schema help text says "leave blank for no cap". 0 collapses to
     // unset to avoid the footgun where typing 0 silently bricks the agent.

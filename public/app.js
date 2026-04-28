@@ -2439,6 +2439,305 @@ function attachSpeakButton(footerEl, text) {
   footerEl.appendChild(btn);
 }
 
+// ----- Schedules (C16a) -----
+
+const schedulesBtn = document.getElementById("schedules-btn");
+const schedulesCount = document.getElementById("schedules-count");
+const schedulesModal = document.getElementById("schedules-modal");
+const schedulesCloseBtn = document.getElementById("schedules-close");
+const scheduleAgentSelect = document.getElementById("schedule-agent");
+const schedulePromptInput = document.getElementById("schedule-prompt");
+const scheduleCronInput = document.getElementById("schedule-cron");
+const scheduleCreateBtn = document.getElementById("schedule-create-btn");
+const schedulePreview = document.getElementById("schedule-preview");
+const schedulesList = document.getElementById("schedules-list");
+
+state.schedules = [];
+
+schedulesBtn.addEventListener("click", openSchedulesModal);
+schedulesCloseBtn.addEventListener("click", () =>
+  schedulesModal.classList.add("hidden"),
+);
+schedulesModal.addEventListener("click", (e) => {
+  if (e.target === schedulesModal) schedulesModal.classList.add("hidden");
+});
+
+document.querySelectorAll(".schedule-presets button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    scheduleCronInput.value = btn.dataset.cron;
+    refreshCronPreview();
+  });
+});
+
+scheduleCronInput.addEventListener("input", debounce(refreshCronPreview, 200));
+scheduleCreateBtn.addEventListener("click", createSchedule);
+
+async function openSchedulesModal() {
+  populateScheduleAgentSelect();
+  await refreshSchedules();
+  refreshCronPreview();
+  schedulesModal.classList.remove("hidden");
+  schedulePromptInput.focus();
+}
+
+function populateScheduleAgentSelect() {
+  if (scheduleAgentSelect.options.length > 0) return;
+  for (const a of state.agents) {
+    const opt = document.createElement("option");
+    opt.value = a.id;
+    opt.textContent = `${a.emoji} ${a.name}`;
+    scheduleAgentSelect.appendChild(opt);
+  }
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+async function refreshCronPreview() {
+  const cron = scheduleCronInput.value.trim();
+  schedulePreview.innerHTML = "";
+  if (!cron) return;
+  try {
+    const res = await fetch("/api/cron/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cron }),
+    });
+    const data = await res.json();
+    if (!data.valid) {
+      const err = document.createElement("div");
+      err.className = "schedule-preview-error";
+      err.textContent = `⚠️ ${data.error}`;
+      schedulePreview.appendChild(err);
+      return;
+    }
+    const heading = document.createElement("div");
+    heading.className = "schedule-preview-heading";
+    heading.textContent = "Next 3 fires:";
+    schedulePreview.appendChild(heading);
+    for (const ms of data.next) {
+      const row = document.createElement("div");
+      row.className = "schedule-preview-row";
+      row.textContent = formatFireTime(ms);
+      schedulePreview.appendChild(row);
+    }
+  } catch {
+    /* network glitch — silent */
+  }
+}
+
+function formatFireTime(ms) {
+  const d = new Date(ms);
+  const local = d.toLocaleString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  return `${local}  ·  in ${formatRelative(ms - Date.now())}`;
+}
+
+function formatRelative(ms) {
+  const sign = ms < 0 ? "-" : "";
+  const a = Math.abs(ms);
+  const sec = Math.floor(a / 1000);
+  if (sec < 60) return `${sign}${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${sign}${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 48) return `${sign}${hr}h ${min % 60}m`;
+  const day = Math.floor(hr / 24);
+  return `${sign}${day}d ${hr % 24}h`;
+}
+
+async function createSchedule() {
+  const agentId = scheduleAgentSelect.value;
+  const prompt = schedulePromptInput.value.trim();
+  const cron = scheduleCronInput.value.trim();
+  if (!agentId || !prompt || !cron) {
+    alert("Pick an agent, write a prompt, and enter a cron expression.");
+    return;
+  }
+  scheduleCreateBtn.disabled = true;
+  scheduleCreateBtn.textContent = "Saving…";
+  try {
+    const res = await fetch("/api/schedules", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentId, prompt, cron }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    schedulePromptInput.value = "";
+    scheduleCronInput.value = "";
+    schedulePreview.innerHTML = "";
+    await refreshSchedules();
+  } catch (err) {
+    alert("Could not create schedule: " + err.message);
+  } finally {
+    scheduleCreateBtn.disabled = false;
+    scheduleCreateBtn.textContent = "Add schedule";
+  }
+}
+
+async function refreshSchedules() {
+  try {
+    const res = await fetch("/api/schedules");
+    state.schedules = await res.json();
+    renderSchedules();
+  } catch {
+    /* no-op */
+  }
+}
+
+function renderSchedules() {
+  schedulesList.innerHTML = "";
+  schedulesCount.textContent = state.schedules.length;
+  schedulesCount.classList.toggle(
+    "has-active",
+    state.schedules.some((s) => s.enabled),
+  );
+
+  if (state.schedules.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "col-empty";
+    empty.textContent = "No schedules yet. Add one above.";
+    schedulesList.appendChild(empty);
+    return;
+  }
+
+  for (const s of state.schedules) {
+    schedulesList.appendChild(renderScheduleCard(s));
+  }
+}
+
+function renderScheduleCard(sched) {
+  const agent = state.agents.find((a) => a.id === sched.agentId);
+  const card = document.createElement("div");
+  card.className = `schedule-card ${sched.enabled ? "enabled" : "paused"}`;
+
+  const head = document.createElement("div");
+  head.className = "schedule-card-head";
+  const agentInfo = document.createElement("span");
+  agentInfo.className = "schedule-card-agent";
+  agentInfo.textContent = agent ? `${agent.emoji} ${agent.name}` : sched.agentId;
+  head.appendChild(agentInfo);
+
+  const status = document.createElement("span");
+  status.className = `schedule-card-status ${sched.enabled ? "enabled" : "paused"}`;
+  status.textContent = sched.enabled
+    ? "● enabled"
+    : `⏸ paused: ${sched.pausedReason ?? "unknown"}`;
+  head.appendChild(status);
+  card.appendChild(head);
+
+  const prompt = document.createElement("div");
+  prompt.className = "schedule-card-prompt";
+  prompt.textContent = sched.prompt;
+  card.appendChild(prompt);
+
+  const meta = document.createElement("div");
+  meta.className = "schedule-card-meta";
+  const cronEl = document.createElement("span");
+  cronEl.className = "schedule-card-cron";
+  cronEl.textContent = sched.cron;
+  meta.appendChild(cronEl);
+
+  const nextEl = document.createElement("span");
+  nextEl.className = "schedule-card-next";
+  if (sched.enabled) {
+    nextEl.textContent = `next in ${formatRelative(sched.nextFireAt - Date.now())}`;
+  } else {
+    nextEl.textContent = "—";
+  }
+  meta.appendChild(nextEl);
+
+  if (sched.lastFiredAt) {
+    const lastEl = document.createElement("span");
+    lastEl.className = `schedule-card-last status-${sched.lastStatus ?? "unknown"}`;
+    const ago = formatRelative(Date.now() - sched.lastFiredAt);
+    const statusLabel = sched.lastStatus
+      ? sched.lastStatus.replace("_", " ")
+      : "fired";
+    lastEl.textContent = `last: ${statusLabel} ${ago} ago`;
+    meta.appendChild(lastEl);
+  }
+
+  if (sched.consecutiveFailures > 0 && sched.enabled) {
+    const failEl = document.createElement("span");
+    failEl.className = "schedule-card-failures";
+    failEl.textContent = `⚠️ ${sched.consecutiveFailures} consecutive failure${sched.consecutiveFailures > 1 ? "s" : ""}`;
+    meta.appendChild(failEl);
+  }
+
+  card.appendChild(meta);
+
+  const actions = document.createElement("div");
+  actions.className = "schedule-card-actions";
+
+  const runNowBtn = document.createElement("button");
+  runNowBtn.className = "run-btn";
+  runNowBtn.textContent = "Run now";
+  runNowBtn.title = "Fire this schedule once, ignoring cron";
+  runNowBtn.addEventListener("click", () => runScheduleNow(sched.id));
+  actions.appendChild(runNowBtn);
+
+  const toggleBtn = document.createElement("button");
+  toggleBtn.textContent = sched.enabled ? "Pause" : "Resume";
+  toggleBtn.addEventListener("click", () => toggleSchedule(sched.id, sched.enabled));
+  actions.appendChild(toggleBtn);
+
+  const delBtn = document.createElement("button");
+  delBtn.textContent = "Delete";
+  delBtn.addEventListener("click", () => deleteSchedule(sched.id));
+  actions.appendChild(delBtn);
+
+  card.appendChild(actions);
+  return card;
+}
+
+async function runScheduleNow(id) {
+  try {
+    const res = await fetch(`/api/schedules/${id}/run-now`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    await refreshSchedules();
+    if (typeof refreshTasks === "function") await refreshTasks();
+  } catch (err) {
+    alert("Run-now failed: " + err.message);
+  }
+}
+
+async function toggleSchedule(id, currentlyEnabled) {
+  try {
+    const path = currentlyEnabled
+      ? `/api/schedules/${id}/pause`
+      : `/api/schedules/${id}/resume`;
+    const res = await fetch(path, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    await refreshSchedules();
+  } catch (err) {
+    alert("Toggle failed: " + err.message);
+  }
+}
+
+async function deleteSchedule(id) {
+  if (!confirm("Delete this schedule?")) return;
+  try {
+    await fetch(`/api/schedules/${id}`, { method: "DELETE" });
+    await refreshSchedules();
+  } catch {
+    /* no-op */
+  }
+}
+
 (async () => {
   await loadModels();
   await loadCwd();
@@ -2447,4 +2746,5 @@ function attachSpeakButton(footerEl, text) {
   await refreshMemories();
   await refreshWhisprDeskStatus();
   await refreshHistoryCount();
+  await refreshSchedules();
 })();
