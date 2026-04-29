@@ -2878,6 +2878,250 @@ async function deleteSchedule(id) {
   }
 }
 
+// ----- Keyboard shortcuts + ⌘K command palette -----
+//
+// One global keydown handler covers two surfaces:
+//   1. Direct shortcuts (⌘; ⌘⇧T ⌘⇧H ⌘⇧M ⌘⇧S) — mapped to the existing
+//      header buttons. Cmd+T / Cmd+S / Cmd+H are reserved by the browser
+//      or macOS, so we use ⌘⇧ for those. ⌘; is unclaimed everywhere.
+//   2. ⌘K command palette — opens a fuzzy-filter list of every modal,
+//      every action, and every agent. Type to narrow, ↑↓ to navigate,
+//      Enter to fire, Esc to close.
+//
+// Esc also closes whichever modal is on top — palette wins because its
+// listener runs first via capture phase. Plain Esc when nothing's open
+// blurs the active input as a no-op.
+
+const paletteModal = document.getElementById("palette-modal");
+const paletteInput = document.getElementById("palette-input");
+const paletteList = document.getElementById("palette-list");
+const paletteCloseBtn = document.getElementById("palette-close");
+
+let _paletteSelected = 0;
+let _paletteVisibleEntries = [];
+
+function buildPaletteEntries() {
+  // Static actions: every header button + sidebar's "+ New agent" + "New chat".
+  const actions = [
+    { label: "Open Tasks", hint: "⌘⇧T", icon: "📋", run: () => document.getElementById("tasks-btn").click() },
+    { label: "Open Schedules", hint: "⌘⇧S", icon: "🕒", run: () => document.getElementById("schedules-btn").click() },
+    { label: "Open Memory", hint: "⌘⇧M", icon: "🧠", run: () => document.getElementById("memory-btn").click() },
+    { label: "Open History", hint: "⌘⇧H", icon: "📜", run: () => document.getElementById("history-btn").click() },
+    { label: "Open Settings", hint: "⌘;",  icon: "⚙️", run: () => document.getElementById("settings-btn").click() },
+    { label: "New chat with current agent", hint: "", icon: "🆕", run: () => document.getElementById("reset-btn").click() },
+    { label: "New custom agent", hint: "", icon: "✨", run: () => document.getElementById("new-agent-btn")?.click() },
+  ];
+  // Dynamic: switch to any agent.
+  const agentEntries = (state.agents || []).map((a) => ({
+    label: `Switch to ${a.name}`,
+    hint: "",
+    icon: a.emoji,
+    run: () => {
+      const el = document.querySelector(`.agent-item[data-id="${a.id}"]`);
+      if (el) el.click();
+    },
+  }));
+  return [...actions, ...agentEntries];
+}
+
+function fuzzyMatch(needle, hay) {
+  if (!needle) return true;
+  const n = needle.toLowerCase();
+  const h = hay.toLowerCase();
+  // Substring check first (cheap), then a per-char threaded match for typos.
+  if (h.includes(n)) return true;
+  let i = 0;
+  for (const c of h) {
+    if (c === n[i]) i++;
+    if (i === n.length) return true;
+  }
+  return false;
+}
+
+function renderPalette() {
+  const filter = paletteInput.value.trim();
+  const entries = buildPaletteEntries().filter((e) => fuzzyMatch(filter, e.label));
+  _paletteVisibleEntries = entries;
+  if (_paletteSelected >= entries.length) _paletteSelected = Math.max(0, entries.length - 1);
+  paletteList.innerHTML = "";
+  if (entries.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "palette-empty";
+    empty.textContent = "No matches";
+    paletteList.appendChild(empty);
+    return;
+  }
+  entries.forEach((entry, idx) => {
+    const row = document.createElement("button");
+    row.type = "button";
+    row.className = "palette-row" + (idx === _paletteSelected ? " selected" : "");
+    row.setAttribute("aria-label", entry.label);
+    const icon = document.createElement("span");
+    icon.className = "palette-row-icon";
+    icon.textContent = entry.icon;
+    const label = document.createElement("span");
+    label.className = "palette-row-label";
+    label.textContent = entry.label;
+    row.appendChild(icon);
+    row.appendChild(label);
+    if (entry.hint) {
+      const hint = document.createElement("span");
+      hint.className = "palette-row-hint";
+      hint.textContent = entry.hint;
+      row.appendChild(hint);
+    }
+    row.addEventListener("click", () => firePaletteEntry(entry));
+    row.addEventListener("mouseenter", () => {
+      _paletteSelected = idx;
+      // Re-style without re-rendering — cheaper than rebuilding the list.
+      paletteList.querySelectorAll(".palette-row").forEach((el, i) => {
+        el.classList.toggle("selected", i === idx);
+      });
+    });
+    paletteList.appendChild(row);
+  });
+}
+
+function openPalette() {
+  paletteModal.classList.remove("hidden");
+  paletteInput.value = "";
+  _paletteSelected = 0;
+  renderPalette();
+  // Focus on next tick so the keydown that opened the palette doesn't race
+  // the input's own keydown handler.
+  setTimeout(() => paletteInput.focus(), 0);
+}
+
+function closePalette() {
+  paletteModal.classList.add("hidden");
+  paletteInput.value = "";
+}
+
+function firePaletteEntry(entry) {
+  closePalette();
+  // Defer the action one tick so the palette closes BEFORE the action fires.
+  // Otherwise the new modal's open-modal listener can race the palette's
+  // close transition.
+  setTimeout(() => {
+    try {
+      entry.run();
+    } catch (err) {
+      console.warn("[palette] action threw:", err);
+    }
+  }, 0);
+}
+
+paletteInput.addEventListener("input", renderPalette);
+paletteCloseBtn.addEventListener("click", closePalette);
+paletteModal.addEventListener("click", (e) => {
+  if (e.target === paletteModal) closePalette();
+});
+paletteInput.addEventListener("keydown", (e) => {
+  if (e.key === "ArrowDown") {
+    e.preventDefault();
+    if (_paletteVisibleEntries.length > 0) {
+      _paletteSelected = (_paletteSelected + 1) % _paletteVisibleEntries.length;
+      renderPalette();
+    }
+  } else if (e.key === "ArrowUp") {
+    e.preventDefault();
+    if (_paletteVisibleEntries.length > 0) {
+      _paletteSelected =
+        (_paletteSelected - 1 + _paletteVisibleEntries.length) % _paletteVisibleEntries.length;
+      renderPalette();
+    }
+  } else if (e.key === "Enter") {
+    e.preventDefault();
+    const chosen = _paletteVisibleEntries[_paletteSelected];
+    if (chosen) firePaletteEntry(chosen);
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    closePalette();
+  }
+});
+
+// Global capture-phase keydown for ⌘K + secondary shortcuts. Capture phase
+// so ⌘K still opens the palette even if focus is in a textarea (otherwise
+// the input swallows it). Esc to close any open modal — palette first since
+// it's the most ephemeral surface.
+document.addEventListener(
+  "keydown",
+  (e) => {
+    const meta = e.metaKey || e.ctrlKey;
+
+    // ⌘K — toggle palette regardless of focus
+    if (meta && (e.key === "k" || e.key === "K")) {
+      e.preventDefault();
+      if (paletteModal.classList.contains("hidden")) {
+        openPalette();
+      } else {
+        closePalette();
+      }
+      return;
+    }
+
+    // Direct shortcuts only fire when no input/textarea is focused — we
+    // don't want ⌘⇧M to grab focus while the user is typing a memory.
+    const t = e.target;
+    const inEditable =
+      t instanceof HTMLElement &&
+      (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+
+    if (meta && !e.shiftKey && e.key === ";") {
+      e.preventDefault();
+      document.getElementById("settings-btn").click();
+      return;
+    }
+    if (meta && e.shiftKey && (e.key === "T" || e.key === "t")) {
+      e.preventDefault();
+      document.getElementById("tasks-btn").click();
+      return;
+    }
+    if (meta && e.shiftKey && (e.key === "S" || e.key === "s")) {
+      e.preventDefault();
+      document.getElementById("schedules-btn").click();
+      return;
+    }
+    if (meta && e.shiftKey && (e.key === "H" || e.key === "h")) {
+      e.preventDefault();
+      document.getElementById("history-btn").click();
+      return;
+    }
+    if (meta && e.shiftKey && (e.key === "M" || e.key === "m")) {
+      e.preventDefault();
+      document.getElementById("memory-btn").click();
+      return;
+    }
+
+    // Esc — close the topmost open modal. Palette is handled by its own
+    // listener above; this catches the rest. We close one at a time so
+    // chained Esc presses peel back layered modals.
+    if (e.key === "Escape" && !inEditable) {
+      const stackOrder = [
+        "tasks-modal",
+        "schedules-modal",
+        "history-modal",
+        "memory-modal",
+        "settings-modal",
+        "agent-modal",
+      ];
+      for (const id of stackOrder) {
+        const el = document.getElementById(id);
+        if (el && !el.classList.contains("hidden")) {
+          el.classList.add("hidden");
+          // Stop polls if applicable (tasks modal owns the approval poll)
+          if (id === "tasks-modal" && typeof stopApprovalPoll === "function") {
+            stopApprovalPoll();
+          }
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+  },
+  true,
+);
+
 (async () => {
   await loadModels();
   await loadCwd();
