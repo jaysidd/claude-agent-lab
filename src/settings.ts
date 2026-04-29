@@ -131,6 +131,18 @@ export const SETTINGS_SCHEMA: SettingsSection[] = [
     ],
   },
   {
+    section: "Approvals (C16d)",
+    fields: [
+      {
+        key: "approvals.production_cwds",
+        label: "Production-marked cwds",
+        placeholder: "one absolute path per line",
+        type: "textarea",
+        help: "Schedules and tasks whose cwd matches any of these paths automatically require approval for ALL tool calls (defense in depth — overrides the per-task toggle). Paths must be absolute. Match is exact-prefix after path.resolve.",
+      },
+    ],
+  },
+  {
     section: "WhisprDesk (voice)",
     fields: [
       {
