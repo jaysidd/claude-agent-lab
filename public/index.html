@@ -308,6 +308,28 @@
       </div>
     </div>
 
+    <div id="palette-modal" class="modal-overlay palette-overlay hidden">
+      <div class="modal palette">
+        <div class="palette-input-wrap">
+          <span class="palette-icon">⌘K</span>
+          <input
+            id="palette-input"
+            type="text"
+            placeholder="Type to filter — actions, agents, or modals"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="palette-close" class="palette-close" type="button" title="Close (Esc)">×</button>
+        </div>
+        <div id="palette-list" class="palette-list"></div>
+        <div class="palette-footer">
+          <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+          <span><kbd>↵</kbd> select</span>
+          <span><kbd>esc</kbd> close</span>
+        </div>
+      </div>
+    </div>
+
     <div id="schedules-modal" class="modal-overlay hidden">
       <div class="modal modal-wide">
         <header class="modal-header">

@@ -911,6 +911,58 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     }
   });
 
+  // ----- Keyboard shortcuts + ⌘K palette -----
+
+  test("Palette — Cmd+K opens, shows actions and agents, filters on type", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.waitForSelector(".agent-item");
+    await page.keyboard.press("Meta+k");
+    await expect(page.locator("#palette-modal")).toBeVisible({ timeout: 3000 });
+
+    // Default entries should include the modals + a Switch-to-<agent> per agent.
+    const entries = page.locator(".palette-row");
+    await expect(entries.filter({ hasText: "Open Tasks" })).toHaveCount(1);
+    await expect(entries.filter({ hasText: "Open Settings" })).toHaveCount(1);
+    await expect(entries.filter({ hasText: "Switch to Main" })).toHaveCount(1);
+
+    // Type to filter — only matches remain
+    await page.locator("#palette-input").fill("settings");
+    await expect(entries.filter({ hasText: "Open Settings" })).toHaveCount(1);
+    await expect(entries.filter({ hasText: "Open Tasks" })).toHaveCount(0);
+
+    // Esc closes the palette
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#palette-modal")).toBeHidden({ timeout: 2000 });
+  });
+
+  test("Palette — Enter on highlighted entry fires the action", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.waitForSelector(".agent-item");
+    await page.keyboard.press("Meta+k");
+    await expect(page.locator("#palette-modal")).toBeVisible({ timeout: 3000 });
+
+    // Filter to Settings, then press Enter to fire
+    await page.locator("#palette-input").fill("settings");
+    await page.keyboard.press("Enter");
+
+    // Palette closes, settings modal opens
+    await expect(page.locator("#palette-modal")).toBeHidden({ timeout: 2000 });
+    await expect(page.locator("#settings-modal")).toBeVisible({ timeout: 2000 });
+  });
+
+  test("Palette — Cmd+; opens Settings without going through palette", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await page.waitForSelector(".agent-item");
+    await page.keyboard.press("Meta+;");
+    await expect(page.locator("#settings-modal")).toBeVisible({ timeout: 2000 });
+  });
+
   test("C16c — cap value of 0 is treated as unset", async ({ request }) => {
     // M2 fix: schema help text says "leave blank for no cap". 0 collapses to
     // unset to avoid the footgun where typing 0 silently bricks the agent.
