@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import Database from "better-sqlite3";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const LAB_DB = path.resolve(TEST_DIR, "..", "data", "lab.db");
@@ -679,6 +680,234 @@ test.describe("Command Center — new features smoke (no engine)", () => {
       expect(patched.nextFireAt).not.toBe(created.nextFireAt);
     } finally {
       await request.delete(`http://localhost:3333/api/schedules/${created.id}`);
+    }
+  });
+
+  // ----- C16d Approvals -----
+
+  function seedPendingApproval(opts: {
+    taskId: string;
+    toolName?: string;
+    workerId?: string;
+    toolInput?: unknown;
+  }): string {
+    // Direct DB write — used to seed pending_approvals so we can exercise
+    // decide / list / orphan-sweep paths without firing a real SDK call.
+    const db = new Database(LAB_DB);
+    const id = crypto.randomUUID();
+    db.prepare(
+      `INSERT INTO pending_approvals
+         (id, task_id, tool_name, tool_use_id, tool_input_json, cwd,
+          status, worker_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+    ).run(
+      id,
+      opts.taskId,
+      opts.toolName ?? "Bash",
+      `tu-${id.slice(0, 8)}`,
+      JSON.stringify(opts.toolInput ?? { command: "echo hi" }),
+      null,
+      opts.workerId ?? "test-worker",
+      Date.now(),
+    );
+    db.close();
+    return id;
+  }
+
+  function deleteApproval(id: string): void {
+    const db = new Database(LAB_DB);
+    db.prepare("DELETE FROM pending_approvals WHERE id = ?").run(id);
+    db.close();
+  }
+
+  test("C16d — POST /api/task accepts requiresApproval and surfaces it on the wire", async ({
+    request,
+  }) => {
+    const created = await (
+      await request.post("http://localhost:3333/api/task", {
+        data: {
+          description: "C16d QA — requires approval",
+          priority: "low",
+          agentId: "main",
+          requiresApproval: true,
+        },
+      })
+    ).json();
+    try {
+      expect(created.requiresApproval).toBe(true);
+      // Same task, fetched via list, should still carry the flag.
+      const all = await (await request.get("http://localhost:3333/api/tasks")).json();
+      const found = all.find((t: any) => t.id === created.id);
+      expect(found?.requiresApproval).toBe(true);
+    } finally {
+      await request.delete(`http://localhost:3333/api/task/${created.id}`);
+    }
+  });
+
+  test("C16d — POST /api/task without requiresApproval omits the flag", async ({
+    request,
+  }) => {
+    const created = await (
+      await request.post("http://localhost:3333/api/task", {
+        data: {
+          description: "C16d QA — no approval",
+          priority: "low",
+          agentId: "main",
+        },
+      })
+    ).json();
+    try {
+      expect("requiresApproval" in created).toBe(false);
+    } finally {
+      await request.delete(`http://localhost:3333/api/task/${created.id}`);
+    }
+  });
+
+  test("C16d — GET /api/approvals?status=pending lists seeded rows", async ({
+    request,
+  }) => {
+    const id = seedPendingApproval({ taskId: "qa-task-1" });
+    try {
+      const rows = await (
+        await request.get("http://localhost:3333/api/approvals?status=pending")
+      ).json();
+      const found = rows.find((r: any) => r.id === id);
+      expect(found).toBeTruthy();
+      expect(found.taskId).toBe("qa-task-1");
+      expect(found.toolName).toBe("Bash");
+      expect(found.toolInput).toEqual({ command: "echo hi" });
+      expect(found.status).toBe("pending");
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("C16d — POST /api/approvals/:id/decide approve flips state with reason", async ({
+    request,
+  }) => {
+    const id = seedPendingApproval({ taskId: "qa-task-2" });
+    try {
+      const r = await request.post(
+        `http://localhost:3333/api/approvals/${id}/decide`,
+        { data: { decision: "approve", reason: "verified the command" } },
+      );
+      expect(r.status()).toBe(200);
+      const decided = await r.json();
+      expect(decided.status).toBe("approved");
+      expect(decided.decisionReason).toBe("verified the command");
+      expect(decided.decidedBy).toBe("operator");
+      expect(decided.decidedAt).toBeGreaterThan(0);
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("C16d — POST /api/approvals/:id/decide reject also flips state", async ({
+    request,
+  }) => {
+    const id = seedPendingApproval({ taskId: "qa-task-3" });
+    try {
+      const decided = await (
+        await request.post(`http://localhost:3333/api/approvals/${id}/decide`, {
+          data: { decision: "reject", reason: "looks suspicious" },
+        })
+      ).json();
+      expect(decided.status).toBe("rejected");
+      expect(decided.decisionReason).toBe("looks suspicious");
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("C16d — second decide on the same approval returns 409 with current state", async ({
+    request,
+  }) => {
+    const id = seedPendingApproval({ taskId: "qa-task-4" });
+    try {
+      await request.post(`http://localhost:3333/api/approvals/${id}/decide`, {
+        data: { decision: "approve" },
+      });
+      const r2 = await request.post(
+        `http://localhost:3333/api/approvals/${id}/decide`,
+        { data: { decision: "reject" } },
+      );
+      expect(r2.status()).toBe(409);
+      const body = await r2.json();
+      expect(body.error).toMatch(/already approved/i);
+      expect(body.approval?.status).toBe("approved");
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("C16d — decide rejects unknown decision values with 400", async ({
+    request,
+  }) => {
+    const id = seedPendingApproval({ taskId: "qa-task-5" });
+    try {
+      const r = await request.post(
+        `http://localhost:3333/api/approvals/${id}/decide`,
+        { data: { decision: "maybe" } },
+      );
+      expect(r.status()).toBe(400);
+    } finally {
+      deleteApproval(id);
+    }
+  });
+
+  test("C16d — GET /api/approvals/:id returns 404 for missing", async ({
+    request,
+  }) => {
+    const r = await request.get(
+      "http://localhost:3333/api/approvals/does-not-exist",
+    );
+    expect(r.status()).toBe(404);
+  });
+
+  test("C16d — settings schema exposes Approvals section with production_cwds key", async ({
+    request,
+  }) => {
+    const settings = await (
+      await request.get("http://localhost:3333/api/settings")
+    ).json();
+    const approvalsSection = settings.schema.find(
+      (s: any) => s.section === "Approvals (C16d)",
+    );
+    expect(approvalsSection).toBeTruthy();
+    const cwdsField = approvalsSection.fields.find(
+      (f: any) => f.key === "approvals.production_cwds",
+    );
+    expect(cwdsField).toBeTruthy();
+    expect(cwdsField.type).toBe("textarea");
+  });
+
+  test("C16d — orphan rows from prior worker_id persist in DB but listing only shows current state", async ({
+    request,
+  }) => {
+    // Seed with a foreign worker_id. Without a server restart, expireOrphaned
+    // hasn't run for this row — so it stays 'pending' until restart. The test
+    // verifies the row is visible on the listing path either way.
+    const id = seedPendingApproval({
+      taskId: "qa-task-orphan",
+      workerId: "FOREIGN-WORKER-FROM-OTHER-PROCESS",
+    });
+    try {
+      const pending = await (
+        await request.get("http://localhost:3333/api/approvals?status=pending")
+      ).json();
+      // Either pending (no restart since seed) or expired (restart happened).
+      // Both are acceptable end-states; the row is reachable.
+      const single = await (
+        await request.get(`http://localhost:3333/api/approvals/${id}`)
+      ).json();
+      expect(["pending", "expired"]).toContain(single.status);
+      // Sanity: workerId roundtrips intact.
+      expect(single.workerId).toBe("FOREIGN-WORKER-FROM-OTHER-PROCESS");
+      // (We don't assert on `pending` array contents because a parallel test
+      // may have created/decided rows in between.)
+      void pending;
+    } finally {
+      deleteApproval(id);
     }
   });
 

@@ -82,6 +82,13 @@ import type {
   OnFire,
   Schedule,
 } from "./scheduler.js";
+import { approvals } from "./approvalsInstance.js";
+import type { Approval } from "./approvals.js";
+import type {
+  HookCallback,
+  HookCallbackMatcher,
+  PreToolUseHookInput,
+} from "@anthropic-ai/claude-agent-sdk";
 
 type TaskPriority = "low" | "medium" | "high";
 type ApiTaskStatus = "queued" | "active" | "done" | "error";
@@ -98,6 +105,7 @@ type ApiTask = {
   createdAt: number;
   result?: string;
   error?: string;
+  requiresApproval?: boolean; // C16d — surfaced from metadata for UI badge
 };
 
 const PRIORITY_TO_NUM: Record<TaskPriority, number> = {
@@ -138,6 +146,7 @@ function toApiTask(t: QueueTask): ApiTask {
     t.error && typeof t.error === "object" && "message" in t.error
       ? String(t.error.message)
       : undefined;
+  const requiresApproval = t.metadata?.requiresApproval === true ? true : undefined;
   return {
     id: t.id,
     description: t.description,
@@ -147,6 +156,7 @@ function toApiTask(t: QueueTask): ApiTask {
     createdAt: t.createdAt,
     result: typeof t.result === "string" ? t.result : undefined,
     error: errMsg,
+    ...(requiresApproval ? { requiresApproval } : {}),
   };
 }
 
@@ -682,6 +692,7 @@ app.post("/api/task", async (req, res) => {
   const description = rawDesc.trim();
   const priority = (req.body?.priority ?? "medium") as TaskPriority;
   const agentOverride = req.body?.agentId as string | undefined;
+  const requiresApproval = req.body?.requiresApproval === true;
   if (!description) return res.status(400).json({ error: "description required" });
   if (!["low", "medium", "high"].includes(priority)) {
     return res.status(400).json({ error: "invalid priority" });
@@ -694,6 +705,7 @@ app.post("/api/task", async (req, res) => {
     description,
     agentId: assignedAgent,
     priority: PRIORITY_TO_NUM[priority],
+    metadata: requiresApproval ? { requiresApproval: true } : undefined,
   });
   pruneCompletedTasks();
   res.json(toApiTask(task));
@@ -737,6 +749,14 @@ app.post("/api/task/:id/run", async (req, res) => {
   let taskApiKeySource: string | undefined;
   const subAgents = subAgentsFor(agent.id);
   const plan = planMode.get(agent.id) === true;
+  const gate = shouldGateRun({ cwd: currentCwd, taskMetadata: checked.metadata });
+  const approvalHook = gate.gated
+    ? buildApprovalHook({
+        taskId: taskId,
+        cwd: currentCwd,
+        productionMarked: gate.productionMarked,
+      })
+    : undefined;
   try {
     for await (const msg of query({
       prompt: checked.description,
@@ -747,6 +767,7 @@ app.post("/api/task/:id/run", async (req, res) => {
         model: effectiveModel(agent.id),
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
+        ...(approvalHook ? { hooks: approvalHook } : {}),
       },
     })) {
       const anyMsg = msg as any;
@@ -1083,6 +1104,142 @@ app.delete("/api/agents/:id", (req, res) => {
 });
 
 // ============================================================================
+// C16d Approvals — production-cwd marker + hook factory
+// ============================================================================
+//
+// The approvals primitive (src/approvals.ts) exposes create/decide/expire +
+// an in-memory awaiter Map. This block wires it into the SDK call paths via
+// a PreToolUse hook factory + a settings-backed production-cwd allowlist.
+//
+// Defense-in-depth: the per-task `requiresApproval` toggle and the production-
+// cwd allowlist are independent. EITHER triggers the hook. The cwd allowlist
+// is the safety net for unattended scheduled fires whose creator forgot to
+// flip the toggle.
+
+const DEFAULT_DANGEROUS_TOOLS = ["Bash", "Write", "Edit", "WebFetch"] as const;
+const APPROVAL_HOOK_TIMEOUT_SECONDS = 60 * 60; // 1 hour, see C16d design Q2
+
+function productionMarkedCwds(): string[] {
+  const raw = configValue("approvals.production_cwds");
+  if (!raw) return [];
+  return raw
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function cwdIsProductionMarked(cwd: string): boolean {
+  if (!cwd) return false;
+  const resolved = path.resolve(cwd);
+  for (const marked of productionMarkedCwds()) {
+    const resolvedMarked = path.resolve(marked);
+    // Exact-prefix match. A marked path of /Users/me/prod matches that path
+    // and any descendant; does NOT match /Users/me/prod-2.
+    if (resolved === resolvedMarked || resolved.startsWith(resolvedMarked + path.sep)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Builds the PreToolUse hook configuration the SDK accepts. Returns
+// `undefined` when there's nothing to gate, so the caller can spread it
+// conditionally into `query()` options without a flag.
+function buildApprovalHook(opts: {
+  taskId: string;
+  cwd: string;
+  productionMarked: boolean;
+}): Partial<Record<"PreToolUse", HookCallbackMatcher[]>> | undefined {
+  // Anchor the dangerous-tools matcher (Reviewer R2 follow-up). Without `^...$`,
+  // `Bash|Write|Edit|WebFetch` would match any tool whose name contains one of
+  // those substrings — `BashHelper`, `MyEdit`, etc. Anchoring forces an exact
+  // match against the SDK's tool name. The production-marked branch keeps `.*`
+  // by design (gate everything).
+  const matcher = opts.productionMarked
+    ? ".*"
+    : `^(?:${DEFAULT_DANGEROUS_TOOLS.join("|")})$`;
+
+  const callback: HookCallback = async (input, _toolUseId, { signal }) => {
+    const pre = input as PreToolUseHookInput;
+
+    // approvals.create() can throw — most importantly when tool_input exceeds
+    // the 64 KB inspection cap. A throw from a hook callback is treated by
+    // the SDK as a non-blocking error (NOT a deny), which would let the
+    // dangerous tool through unattended. Reviewer R11. Catch the throw here
+    // and return an explicit deny so a malformed/oversized tool_input fails
+    // closed instead of fails open.
+    let handle;
+    try {
+      handle = approvals.create({
+        taskId: opts.taskId,
+        toolName: pre.tool_name,
+        toolUseId: pre.tool_use_id,
+        toolInput: pre.tool_input,
+        cwd: opts.cwd,
+        workerId: WORKER_ID,
+      });
+    } catch (err: any) {
+      const message = err?.message ?? "approval creation failed";
+      console.warn(
+        `[approvals] hook callback denied tool ${pre.tool_name} on task ${opts.taskId}: ${message}`,
+      );
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: `approval gate could not record this call: ${message}`,
+        },
+      };
+    }
+
+    // If the SDK aborts (client disconnect, server shutdown handler, etc.),
+    // mark the approval expired so the kanban row doesn't dangle and the
+    // awaiter Promise resolves cleanly.
+    const onAbort = () => approvals.expire(handle.id, "sdk_aborted");
+    signal.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      const decision = await handle.awaitDecision();
+      return {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: decision.status === "approved" ? "allow" : "deny",
+          permissionDecisionReason:
+            decision.reason ?? `approval ${decision.status} by operator`,
+        },
+      };
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+    }
+  };
+
+  return {
+    PreToolUse: [
+      {
+        matcher,
+        timeout: APPROVAL_HOOK_TIMEOUT_SECONDS,
+        hooks: [callback],
+      },
+    ],
+  };
+}
+
+// Convenience: should this run attach the approval hook? Centralized so the
+// per-task toggle and production-cwd allowlist stay aligned across both run
+// paths (manual /api/task/:id/run + scheduler onFire).
+function shouldGateRun(opts: {
+  cwd: string;
+  taskMetadata: Record<string, unknown> | null;
+}): { gated: boolean; productionMarked: boolean } {
+  const productionMarked = cwdIsProductionMarked(opts.cwd);
+  const taskFlag = opts.taskMetadata?.requiresApproval === true;
+  return {
+    gated: productionMarked || taskFlag,
+    productionMarked,
+  };
+}
+
+// ============================================================================
 // C16a Scheduler — wiring + routes
 // ============================================================================
 //
@@ -1185,6 +1342,19 @@ const fireScheduledTask: OnFire = async (
   const plan = planMode.get(agent.id) === true;
   const fireCwd = ctx.cwd || currentCwd;
 
+  // Scheduled fires don't expose a per-task `requiresApproval` flag (yet —
+  // future enhancement on the schedule row itself). Production-cwd allowlist
+  // is the only gate path here. The hook fires for every tool call when the
+  // cwd matches.
+  const scheduledGate = cwdIsProductionMarked(fireCwd);
+  const scheduledHook = scheduledGate
+    ? buildApprovalHook({
+        taskId: ctx.taskId,
+        cwd: fireCwd,
+        productionMarked: true,
+      })
+    : undefined;
+
   try {
     for await (const msg of query({
       prompt: ctx.prompt,
@@ -1195,6 +1365,7 @@ const fireScheduledTask: OnFire = async (
         model: effectiveModel(agent.id),
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
+        ...(scheduledHook ? { hooks: scheduledHook } : {}),
       },
     })) {
       const anyMsg = msg as any;
@@ -1371,6 +1542,58 @@ app.post("/api/cron/preview", (req, res) => {
       error: (err?.message ?? "invalid cron").split("\n")[0],
     });
   }
+});
+
+// ============================================================================
+// C16d Approvals — operator-facing routes
+// ============================================================================
+
+function toApiApproval(a: Approval) {
+  return a; // wire shape == internal shape; UI handles tool_input rendering
+}
+
+app.get("/api/approvals", (req, res) => {
+  const status = (req.query.status as string | undefined) ?? "pending";
+  const knownStatuses = ["pending", "approved", "rejected", "expired"] as const;
+  if (!knownStatuses.includes(status as (typeof knownStatuses)[number])) {
+    return res.status(400).json({ error: "invalid status filter" });
+  }
+  res.json(
+    approvals
+      .list({ status: status as (typeof knownStatuses)[number] })
+      .map(toApiApproval),
+  );
+});
+
+app.get("/api/approvals/:id", (req, res) => {
+  const a = approvals.get(req.params.id);
+  if (!a) return res.status(404).json({ error: "not found" });
+  res.json(toApiApproval(a));
+});
+
+app.post("/api/approvals/:id/decide", (req, res) => {
+  const decision = req.body?.decision;
+  if (decision !== "approve" && decision !== "reject") {
+    return res.status(400).json({
+      error: "decision required: 'approve' | 'reject'",
+    });
+  }
+  const reason =
+    typeof req.body?.reason === "string" && req.body.reason.trim()
+      ? req.body.reason.trim().slice(0, 1000)
+      : null;
+  const status = decision === "approve" ? "approved" : "rejected";
+  const updated = approvals.decide(req.params.id, status, reason);
+  if (!updated) {
+    // Either the approval doesn't exist or it's already in a terminal state.
+    const existing = approvals.get(req.params.id);
+    if (!existing) return res.status(404).json({ error: "not found" });
+    return res.status(409).json({
+      error: `approval already ${existing.status}`,
+      approval: toApiApproval(existing),
+    });
+  }
+  res.json(toApiApproval(updated));
 });
 
 // ============================================================================

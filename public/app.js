@@ -813,9 +813,15 @@ state.memories = [];
 state.planMode = {};
 
 tasksBtn.addEventListener("click", openTasksModal);
-tasksCloseBtn.addEventListener("click", () => tasksModal.classList.add("hidden"));
+tasksCloseBtn.addEventListener("click", () => {
+  tasksModal.classList.add("hidden");
+  stopApprovalPoll();
+});
 tasksModal.addEventListener("click", (e) => {
-  if (e.target === tasksModal) tasksModal.classList.add("hidden");
+  if (e.target === tasksModal) {
+    tasksModal.classList.add("hidden");
+    stopApprovalPoll();
+  }
 });
 
 async function openTasksModal() {
@@ -823,6 +829,7 @@ async function openTasksModal() {
   await refreshTasks();
   tasksModal.classList.remove("hidden");
   taskDescription.focus();
+  startApprovalPoll();
 }
 
 function populateTaskAgentSelect() {
@@ -851,6 +858,8 @@ async function createTask() {
   try {
     const body = { description, priority: taskPriority.value };
     if (taskAgentSelect.value) body.agentId = taskAgentSelect.value;
+    const requiresApprovalEl = document.getElementById("task-requires-approval");
+    if (requiresApprovalEl?.checked) body.requiresApproval = true;
     const res = await fetch("/api/task", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -859,6 +868,7 @@ async function createTask() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     taskDescription.value = "";
+    if (requiresApprovalEl) requiresApprovalEl.checked = false;
     await refreshTasks();
   } catch (err) {
     alert("Could not create task: " + err.message);
@@ -870,11 +880,53 @@ async function createTask() {
 
 async function refreshTasks() {
   try {
-    const res = await fetch("/api/tasks");
-    state.tasks = await res.json();
+    const [tasksRes, approvalsRes] = await Promise.all([
+      fetch("/api/tasks"),
+      fetch("/api/approvals?status=pending"),
+    ]);
+    state.tasks = await tasksRes.json();
+    const approvals = approvalsRes.ok ? await approvalsRes.json() : [];
+    // Index by taskId so renderTaskCard can look up O(1) — multiple pending
+    // approvals on the same task are possible (sequential tool calls in one
+    // run; the second only created after the first decides).
+    state.pendingApprovalsByTask = {};
+    for (const a of approvals) {
+      (state.pendingApprovalsByTask[a.taskId] ||= []).push(a);
+    }
     renderTasks();
   } catch {
     /* no-op */
+  }
+}
+
+// Soft 5s poll while the tasks modal is open, so a pending approval
+// triggered by a long-running task surfaces without a manual refresh.
+// Stopped on modal close to avoid background work.
+let _approvalPollHandle = null;
+function startApprovalPoll() {
+  if (_approvalPollHandle) return;
+  _approvalPollHandle = setInterval(refreshTasks, 5000);
+}
+function stopApprovalPoll() {
+  if (_approvalPollHandle) {
+    clearInterval(_approvalPollHandle);
+    _approvalPollHandle = null;
+  }
+}
+
+async function decideApproval(approvalId, decision, reason) {
+  try {
+    const res = await fetch(`/api/approvals/${approvalId}/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision, reason: reason || undefined }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    delete state.approvalDrafts[approvalId];
+    await refreshTasks();
+  } catch (err) {
+    alert(`Could not ${decision}: ${err.message}`);
   }
 }
 
@@ -916,10 +968,85 @@ function renderColumn(id, items) {
   for (const t of items) el.appendChild(renderTaskCard(t));
 }
 
+// Per-approval draft store. The 5s poll re-renders the panel; without this
+// the in-flight reason input would be wiped between the user's keystroke
+// and their click. Keyed by approval.id, cleared on successful decide.
+state.approvalDrafts = state.approvalDrafts || {};
+
+function renderApprovalPanel(approval) {
+  const panel = document.createElement("div");
+  panel.className = "approval-panel";
+
+  const head = document.createElement("div");
+  head.className = "approval-head";
+  const badge = document.createElement("span");
+  badge.className = "approval-badge";
+  badge.textContent = "⏸ awaiting approval";
+  head.appendChild(badge);
+  const tool = document.createElement("span");
+  tool.className = "approval-tool";
+  tool.textContent = approval.toolName;
+  head.appendChild(tool);
+  if (approval.cwd) {
+    const cwdEl = document.createElement("span");
+    cwdEl.className = "approval-cwd";
+    cwdEl.textContent = approval.cwd;
+    cwdEl.title = "cwd at the moment the tool fired";
+    head.appendChild(cwdEl);
+  }
+  panel.appendChild(head);
+
+  // Pretty-printed JSON payload — what the agent is about to invoke.
+  const payload = document.createElement("pre");
+  payload.className = "approval-payload";
+  try {
+    payload.textContent = JSON.stringify(approval.toolInput, null, 2);
+  } catch {
+    payload.textContent = String(approval.toolInput);
+  }
+  panel.appendChild(payload);
+
+  const reasonInput = document.createElement("input");
+  reasonInput.type = "text";
+  reasonInput.placeholder = "Optional reason (encouraged on reject)";
+  reasonInput.className = "approval-reason";
+  reasonInput.value = state.approvalDrafts[approval.id] ?? "";
+  reasonInput.addEventListener("input", () => {
+    state.approvalDrafts[approval.id] = reasonInput.value;
+  });
+  panel.appendChild(reasonInput);
+
+  const actions = document.createElement("div");
+  actions.className = "approval-actions";
+  const approveBtn = document.createElement("button");
+  approveBtn.className = "approval-approve";
+  approveBtn.textContent = "Approve";
+  approveBtn.addEventListener("click", () => {
+    decideApproval(approval.id, "approve", reasonInput.value);
+  });
+  const rejectBtn = document.createElement("button");
+  rejectBtn.className = "approval-reject";
+  rejectBtn.textContent = "Reject";
+  rejectBtn.addEventListener("click", () => {
+    decideApproval(approval.id, "reject", reasonInput.value);
+  });
+  actions.appendChild(approveBtn);
+  actions.appendChild(rejectBtn);
+  panel.appendChild(actions);
+
+  return panel;
+}
+
 function renderTaskCard(task) {
   const agent = state.agents.find((a) => a.id === task.assignedAgent);
+  const pendingApprovals =
+    (state.pendingApprovalsByTask && state.pendingApprovalsByTask[task.id]) || [];
   const card = document.createElement("div");
-  card.className = `task-card status-${task.status}`;
+  const awaitingApproval = pendingApprovals.length > 0;
+  card.className =
+    `task-card status-${task.status}` +
+    (awaitingApproval ? " awaiting-approval" : "") +
+    (task.requiresApproval ? " marked-approval" : "");
 
   const head = document.createElement("div");
   head.className = "task-card-head";
@@ -931,12 +1058,25 @@ function renderTaskCard(task) {
   prio.textContent = task.priority;
   head.appendChild(agentInfo);
   head.appendChild(prio);
+  if (task.requiresApproval) {
+    const ra = document.createElement("span");
+    ra.className = "task-card-requires-approval";
+    ra.textContent = "🛡 approval";
+    ra.title = "This task pauses before each Bash/Write/Edit/WebFetch tool call";
+    head.appendChild(ra);
+  }
   card.appendChild(head);
 
   const desc = document.createElement("div");
   desc.className = "task-card-desc";
   desc.textContent = task.description;
   card.appendChild(desc);
+
+  // Inline approval panel — one per pending approval. Each surfaces the tool
+  // name + JSON payload + Approve/Reject buttons + optional reason field.
+  for (const approval of pendingApprovals) {
+    card.appendChild(renderApprovalPanel(approval));
+  }
 
   if (task.status === "done" && task.result) {
     const result = document.createElement("div");
