@@ -166,9 +166,6 @@ export const SETTINGS_SCHEMA: SettingsSection[] = [
   },
   {
     section: "Telegram bridge",
-    disabled: true,
-    disabledNote:
-      "Coming in C05 — the bridge code isn't shipped yet. Saving here won't do anything until the listener lands.",
     fields: [
       {
         key: "telegram.bot_token",
@@ -177,15 +174,15 @@ export const SETTINGS_SCHEMA: SettingsSection[] = [
         envFallback: "TELEGRAM_BOT_TOKEN",
         isSecret: true,
         type: "password",
-        help: "Create a bot at @BotFather on Telegram.",
+        help: "DM @BotFather on Telegram, send /newbot, follow the prompts. Paste the resulting token here. The listener restarts automatically when you save.",
       },
       {
         key: "telegram.allowed_chat_ids",
         label: "Allowed chat IDs",
-        placeholder: "12345,67890  (comma-separated)",
+        placeholder: "12345,67890  (comma- or whitespace-separated)",
         envFallback: "TELEGRAM_ALLOWED_CHAT_IDS",
         type: "text",
-        help: "Only these chat IDs will be allowed to message the bot.",
+        help: "DMs from these chat IDs are routed to your agents; others are silently dropped. Find your chat ID by messaging the bot once and visiting https://api.telegram.org/bot<TOKEN>/getUpdates. Empty = block all.",
       },
     ],
   },

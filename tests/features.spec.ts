@@ -237,16 +237,19 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     expect(list.find((a) => a.id === agent.id)).toBeUndefined();
   });
 
-  test("settings Telegram section renders disabled with 'coming soon' badge", async ({ page }) => {
+  test("settings Telegram section is enabled (post-C05) with editable inputs", async ({ page }) => {
     await page.goto("/");
     await page.locator("#settings-btn").click();
     await expect(page.locator("#settings-modal")).toBeVisible({ timeout: 5_000 });
 
     const telegramSection = page.locator(".settings-section", { hasText: /Telegram/i });
-    await expect(telegramSection.locator(".section-badge")).toContainText(/coming soon/i);
-    // Inputs inside Telegram section should be disabled
-    const disabledInputs = telegramSection.locator("input[disabled]");
-    expect(await disabledInputs.count()).toBeGreaterThan(0);
+    // The "coming soon" badge is gone post-C05.
+    await expect(telegramSection.locator(".section-badge")).toHaveCount(0);
+    // Inputs inside Telegram section should be editable.
+    const enabledInputs = telegramSection.locator("input:not([disabled])");
+    expect(await enabledInputs.count()).toBeGreaterThan(0);
+    // Test connection button shows up.
+    await expect(telegramSection.locator(".btn-test")).toBeVisible();
   });
 
   test("custom agent CRUD flow end-to-end", async ({ page, request }) => {
@@ -912,6 +915,97 @@ test.describe("Command Center — new features smoke (no engine)", () => {
   });
 
   // ----- Keyboard shortcuts + ⌘K palette -----
+
+  // ----- C05 Telegram bridge -----
+
+  test("C05 — /api/telegram/status returns stopped when no token configured", async ({
+    request,
+  }) => {
+    // Make sure no token is set (clear any leftover from manual testing).
+    await request.post("http://localhost:3333/api/settings", {
+      data: {
+        entries: [
+          { key: "telegram.bot_token", value: null },
+          { key: "telegram.allowed_chat_ids", value: null },
+        ],
+      },
+    });
+    // Give the restart a tick to settle.
+    await new Promise((r) => setTimeout(r, 200));
+    const r = await request.get("http://localhost:3333/api/telegram/status");
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(["stopped", "auth_failed", "error", "conflict"]).toContain(body.kind);
+  });
+
+  test("C05 — /api/telegram/test reports 'no token configured' when blank", async ({
+    request,
+  }) => {
+    await request.post("http://localhost:3333/api/settings", {
+      data: { entries: [{ key: "telegram.bot_token", value: null }] },
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    const r = await request.post("http://localhost:3333/api/telegram/test");
+    expect(r.status()).toBe(200);
+    const body = await r.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toMatch(/no token/i);
+  });
+
+  test("C05 — Telegram section in settings schema is no longer disabled", async ({
+    request,
+  }) => {
+    const settings = await (
+      await request.get("http://localhost:3333/api/settings")
+    ).json();
+    const tg = settings.schema.find((s: any) => s.section === "Telegram bridge");
+    expect(tg).toBeTruthy();
+    // The "coming soon" disabled flag is gone in C05.
+    expect(tg.disabled).toBeFalsy();
+    expect(tg.fields.map((f: any) => f.key)).toEqual([
+      "telegram.bot_token",
+      "telegram.allowed_chat_ids",
+    ]);
+  });
+
+  test("C05 — saving a fake token triggers a restart and the status reflects auth_failed", async ({
+    request,
+  }) => {
+    // Save a syntactically-plausible-but-fake token. The listener will
+    // try getMe(), Telegram returns 401, status flips to auth_failed.
+    // This proves the settings-save → restart path actually re-reads
+    // from settings rather than caching the old token in memory.
+    const fakeToken = "111111111:AAA-FAKE-TOKEN-FOR-QA-DO-NOT-USE";
+    try {
+      await request.post("http://localhost:3333/api/settings", {
+        data: {
+          entries: [
+            { key: "telegram.bot_token", value: fakeToken, isSecret: true },
+            { key: "telegram.allowed_chat_ids", value: "12345" },
+          ],
+        },
+      });
+      // Wait for the async restartTelegram() + getMe() roundtrip.
+      // 5s is comfortably more than a Telegram getMe call (~200ms).
+      await new Promise((r) => setTimeout(r, 5000));
+      const status = await (
+        await request.get("http://localhost:3333/api/telegram/status")
+      ).json();
+      // auth_failed is the expected outcome for a fabricated token. We
+      // accept "error" too in case the test runs offline (DNS failure on
+      // api.telegram.org would surface as kind=error, not auth_failed).
+      expect(["auth_failed", "error"]).toContain(status.kind);
+    } finally {
+      await request.post("http://localhost:3333/api/settings", {
+        data: {
+          entries: [
+            { key: "telegram.bot_token", value: null },
+            { key: "telegram.allowed_chat_ids", value: null },
+          ],
+        },
+      });
+    }
+  });
 
   test("Palette — Cmd+K opens, shows actions and agents, filters on type", async ({
     page,
