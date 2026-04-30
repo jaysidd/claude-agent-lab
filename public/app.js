@@ -2183,6 +2183,21 @@ function renderSettings() {
       result.dataset.role = "test-result";
       secEl.appendChild(result);
     }
+    if (section.section.startsWith("Telegram")) {
+      const testBtn = document.createElement("button");
+      testBtn.className = "btn-test";
+      testBtn.type = "button";
+      testBtn.textContent = "Test connection";
+      testBtn.addEventListener("click", () => testTelegram(secEl));
+      secEl.appendChild(testBtn);
+      const result = document.createElement("div");
+      result.dataset.role = "test-result";
+      secEl.appendChild(result);
+      // Surface the listener's live status when the section first renders
+      // so the operator sees ● connected / ⚠ auth_failed / etc. without
+      // having to click Test.
+      refreshTelegramStatusInto(result);
+    }
 
     settingsSectionsEl.appendChild(secEl);
   }
@@ -2227,6 +2242,63 @@ async function saveSettings() {
   } finally {
     settingsSaveBtn.disabled = false;
     settingsSaveBtn.textContent = "Save changes";
+  }
+}
+
+async function testTelegram(secEl) {
+  const result = secEl.querySelector("[data-role='test-result']");
+  result.className = "settings-test-result";
+  result.textContent = "Testing…";
+  try {
+    const res = await fetch("/api/telegram/test", { method: "POST" });
+    const data = await res.json();
+    if (data.ok) {
+      result.classList.add("ok");
+      result.textContent = `✓ Bot @${data.botUsername}`;
+    } else {
+      result.classList.add("err");
+      result.textContent = `Test failed: ${data.error}`;
+    }
+  } catch (err) {
+    result.classList.add("err");
+    result.textContent = "Test failed: " + err.message;
+  }
+}
+
+// Show the listener's live status (not a probe — reads what the long-poll
+// loop currently knows). Called when the Telegram settings section renders.
+async function refreshTelegramStatusInto(resultEl) {
+  try {
+    const res = await fetch("/api/telegram/status");
+    const data = await res.json();
+    resultEl.className = "settings-test-result";
+    if (data.kind === "stopped") {
+      resultEl.textContent = "Listener not running — save a token to start.";
+      return;
+    }
+    if (data.kind === "starting") {
+      resultEl.textContent = "Starting…";
+      return;
+    }
+    if (data.kind === "listening") {
+      resultEl.classList.add("ok");
+      resultEl.textContent = `● connected as @${data.botUsername}`;
+      return;
+    }
+    if (data.kind === "auth_failed") {
+      resultEl.classList.add("err");
+      resultEl.textContent = `Auth failed: ${data.error}`;
+      return;
+    }
+    if (data.kind === "conflict") {
+      resultEl.classList.add("err");
+      resultEl.textContent = `Conflict: ${data.error} (another instance is polling this token)`;
+      return;
+    }
+    resultEl.classList.add("err");
+    resultEl.textContent = `Error: ${data.error ?? "unknown"}`;
+  } catch {
+    /* leave blank — status is best-effort */
   }
 }
 

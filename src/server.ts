@@ -89,6 +89,19 @@ import type {
   HookCallbackMatcher,
   PreToolUseHookInput,
 } from "@anthropic-ai/claude-agent-sdk";
+import {
+  configureTelegram,
+  startTelegram,
+  restartTelegram,
+  telegramStatus,
+  testTelegramToken,
+} from "./telegramInstance.js";
+import {
+  sendMessage as telegramSendMessage,
+  sendChatAction as telegramSendChatAction,
+  chunkReply as telegramChunkReply,
+  type IncomingMessageContext as TelegramCtx,
+} from "./telegram.js";
 
 type TaskPriority = "low" | "medium" | "high";
 type ApiTaskStatus = "queued" | "active" | "done" | "error";
@@ -998,10 +1011,12 @@ app.post("/api/settings", (req, res) => {
   };
 
   let changed = 0;
+  let telegramTouched = false;
   for (const entry of entries) {
     const { key, value, isSecret } = entry ?? {};
     if (typeof key !== "string") continue;
     if (!knownKeys.has(key) && !isCostGuardOverride(key)) continue;
+    if (key.startsWith("telegram.")) telegramTouched = true;
     if (value === null || value === undefined) {
       deleteSetting(key);
       changed++;
@@ -1011,6 +1026,18 @@ app.post("/api/settings", (req, res) => {
     }
     // empty string = no-op (preserves existing secret when user leaves field blank)
   }
+
+  // Telegram listener picks up its config from the settings table at start
+  // time, so changing the token or chat-ID allowlist requires restarting
+  // the long-poll loop. Fire-and-forget — the response shouldn't block on
+  // a getMe roundtrip; the operator can refresh /api/telegram/status if
+  // they want the live state.
+  if (telegramTouched) {
+    restartTelegram().catch((err) => {
+      console.warn(`[telegram] restart after settings save failed: ${err?.message ?? err}`);
+    });
+  }
+
   res.json({ ok: true, changed });
 });
 
@@ -1594,6 +1621,245 @@ app.post("/api/approvals/:id/decide", (req, res) => {
     });
   }
   res.json(toApiApproval(updated));
+});
+
+// ============================================================================
+// C05 Telegram bridge — onMessage handler + routes + listener bootstrap
+// ============================================================================
+//
+// Wires incoming Telegram messages to the same agent invocation path the
+// web UI uses. Parses an optional /<agent_id> command prefix, resolves the
+// agent via agentRegistry, runs CostGuard preflight, fires query() with the
+// shared sessionByAgent state, and sends the reply (chunked at 4000 chars).
+
+const TELEGRAM_DEFAULT_AGENT_ID = "main";
+
+function parseTelegramCommand(
+  text: string,
+): { agentId: string | null; body: string; isHelp: boolean; isAgentList: boolean } {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("/")) {
+    return { agentId: null, body: trimmed, isHelp: false, isAgentList: false };
+  }
+  const spaceIdx = trimmed.indexOf(" ");
+  const cmd = (spaceIdx === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIdx))
+    .toLowerCase()
+    .replace(/@.*$/, ""); // /main@my_bot → /main (Telegram appends @botname in groups)
+  const body = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+  if (cmd === "help" || cmd === "h" || cmd === "start") {
+    return { agentId: null, body: "", isHelp: true, isAgentList: false };
+  }
+  if (cmd === "agents" || cmd === "list") {
+    return { agentId: null, body: "", isHelp: false, isAgentList: true };
+  }
+  return { agentId: cmd, body, isHelp: false, isAgentList: false };
+}
+
+function buildTelegramHelp(): string {
+  const agentLines = allAgents()
+    .map((a) => `• /${a.id} — ${a.name} (${a.description})`)
+    .join("\n");
+  return [
+    "*Command Center bot*",
+    "",
+    "Send a plain message to chat with Main (the router).",
+    "Or use a slash command to target a specific agent:",
+    "",
+    agentLines,
+    "",
+    "/help — show this message",
+    "/agents — list current agents",
+  ].join("\n");
+}
+
+function buildTelegramAgentList(): string {
+  return allAgents()
+    .map((a) => `• ${a.emoji} *${a.name}* — \`/${a.id}\` (${a.model})`)
+    .join("\n");
+}
+
+const onTelegramMessage = async (ctx: TelegramCtx): Promise<void> => {
+  // Re-read the token on each message — Settings save can rotate it.
+  const token = configValue("telegram.bot_token", "TELEGRAM_BOT_TOKEN");
+  if (!token) return; // Listener was started but token cleared mid-poll; bail.
+
+  const parsed = parseTelegramCommand(ctx.text);
+
+  // Built-in commands handled inline, no agent fire.
+  if (parsed.isHelp) {
+    await telegramSendMessage(token, ctx.chatId, buildTelegramHelp(), {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+  if (parsed.isAgentList) {
+    await telegramSendMessage(token, ctx.chatId, buildTelegramAgentList(), {
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  // Resolve the target agent. Bare text → default; /<id> → that id.
+  const targetId = parsed.agentId ?? TELEGRAM_DEFAULT_AGENT_ID;
+  const agent = findAgent(targetId);
+  if (!agent) {
+    await telegramSendMessage(
+      token,
+      ctx.chatId,
+      `⚠️ Unknown agent: \`${targetId}\`. Try /agents.`,
+      { parse_mode: "Markdown" },
+    );
+    return;
+  }
+
+  // Use parsed.body, NOT ctx.text — for bare text both are equal (trimmed),
+  // but for `/main` with no body, parsed.body is "" while ctx.text is the
+  // literal "/main". Reviewer R9: the prior fallback would send "/main" as
+  // the agent's prompt, burning tokens on the command string itself.
+  const prompt = parsed.body;
+  if (!prompt.trim()) {
+    await telegramSendMessage(
+      token,
+      ctx.chatId,
+      `What would you like ${agent.name} to do?`,
+    );
+    return;
+  }
+
+  // CostGuard preflight — fail fast without burning tokens if exhausted.
+  const guard = costGuard.check(agent.id);
+  if (!guard.ok) {
+    await telegramSendMessage(
+      token,
+      ctx.chatId,
+      `⚠️ ${guard.reason ?? "budget cap reached"}`,
+    );
+    return;
+  }
+
+  // Maintain a typing... indicator throughout the SDK call. Telegram
+  // clears the indicator after ~5s, so we re-send every 4s. Stops in
+  // the finally block. The sleep is wake-able so the SDK reply lands
+  // immediately instead of waiting up to 4 s for the next loop tick.
+  // C05 perf audit P1.
+  let typingActive = true;
+  let wakeTypingLoop: () => void = () => {};
+  const typingLoop = (async () => {
+    while (typingActive) {
+      try {
+        await telegramSendChatAction(token, ctx.chatId, "typing");
+      } catch {
+        /* swallow — surfacing typing errors to the operator is noisier than useful */
+      }
+      if (!typingActive) break;
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, 4000);
+        wakeTypingLoop = () => { clearTimeout(t); resolve(); };
+      });
+    }
+  })();
+
+  let finalText = "";
+  let usage: any;
+  let costUsd: number | undefined;
+  let apiKeySource: string | undefined;
+  let newSessionId: string | undefined;
+  let agentError: string | null = null;
+
+  const subAgents = subAgentsFor(agent.id);
+  const plan = planMode.get(agent.id) === true;
+  const resumeId = sessionByAgent.get(agent.id);
+
+  try {
+    for await (const msg of query({
+      prompt,
+      options: {
+        allowedTools: agent.allowedTools,
+        systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
+        cwd: currentCwd,
+        model: effectiveModel(agent.id),
+        ...(resumeId ? { resume: resumeId } : {}),
+        ...(plan ? { permissionMode: "plan" as const } : {}),
+        ...(subAgents ? { agents: subAgents } : {}),
+      },
+    })) {
+      const anyMsg = msg as any;
+      if (anyMsg.type === "system" && anyMsg.subtype === "init") {
+        apiKeySource = anyMsg.apiKeySource ?? anyMsg.data?.apiKeySource;
+        if (typeof anyMsg.session_id === "string") newSessionId = anyMsg.session_id;
+      }
+      if (anyMsg.type === "result") {
+        if (typeof anyMsg.result === "string") finalText = anyMsg.result;
+        if (anyMsg.usage) usage = anyMsg.usage;
+        if (typeof anyMsg.total_cost_usd === "number") costUsd = anyMsg.total_cost_usd;
+      }
+    }
+  } catch (err: any) {
+    agentError = err?.message ?? "agent failed";
+  } finally {
+    typingActive = false;
+    wakeTypingLoop();
+    await typingLoop;
+  }
+
+  // Persist the new session id to the shared map (web UI sees the same).
+  if (newSessionId) sessionByAgent.set(agent.id, newSessionId);
+
+  costGuard.record(agent.id, {
+    inputTokens: usage?.input_tokens ?? 0,
+    outputTokens: usage?.output_tokens ?? 0,
+    costUsd: costUsd ?? 0,
+    isOAuth: apiKeySource === "none",
+  });
+
+  if (agentError) {
+    await telegramSendMessage(
+      token,
+      ctx.chatId,
+      `⚠️ Agent error: ${agentError}`,
+    );
+    return;
+  }
+
+  const replyText = finalText || "_(no reply)_";
+  const chunks = telegramChunkReply(replyText);
+  for (const chunk of chunks) {
+    try {
+      await telegramSendMessage(token, ctx.chatId, chunk, {
+        parse_mode: "Markdown",
+      });
+    } catch (err: any) {
+      // Markdown parse errors fall through to plain text — the agent might
+      // have emitted invalid markdown the operator still wants to see.
+      const isParseError = /can't parse entities/i.test(err?.message ?? "");
+      if (isParseError) {
+        await telegramSendMessage(token, ctx.chatId, chunk).catch(() => {});
+      } else {
+        console.warn(`[telegram] sendMessage failed: ${err?.message ?? err}`);
+      }
+    }
+  }
+};
+
+configureTelegram(onTelegramMessage);
+startTelegram().then((status) => {
+  if (status.kind === "listening") {
+    console.log(`[telegram] listening as @${status.botUsername}`);
+  } else if (status.kind !== "stopped") {
+    console.warn(`[telegram] start status: ${status.kind} (${"error" in status ? status.error : ""})`);
+  }
+  // status.kind === "stopped" means no token — silent, this is the default.
+});
+
+// --- Telegram routes ---
+
+app.get("/api/telegram/status", (_req, res) => {
+  res.json(telegramStatus());
+});
+
+app.post("/api/telegram/test", async (_req, res) => {
+  const result = await testTelegramToken();
+  res.json(result);
 });
 
 // ============================================================================
