@@ -924,9 +924,49 @@ body {
   font-size: 12px;
   cursor: pointer;
   font-family: inherit;
-  margin-top: 6px;
 }
 .settings-section .btn-test:hover { border-color: var(--accent); }
+
+/* Per-section action row — Save section + Test connection live here side-by-side */
+.section-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  align-items: center;
+}
+.btn-save-section {
+  background: var(--accent);
+  color: #0e1016;
+  border: 0;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background-color 0.15s ease;
+}
+.btn-save-section:hover { filter: brightness(1.08); }
+.btn-save-section:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-save-section.saved {
+  background: #6ee7b7;
+  color: #0e1016;
+}
+
+/* Dirty-state cue — amber border when the user has typed unsaved changes */
+.settings-field input.dirty,
+.settings-field textarea.dirty {
+  border-color: #fbbf24;
+  background: rgba(251,191,36,0.04);
+}
+.settings-field input.dirty:focus,
+.settings-field textarea.dirty:focus {
+  border-color: #fbbf24;
+  box-shadow: 0 0 0 1px rgba(251,191,36,0.4);
+}
 .settings-test-result {
   margin-top: 6px;
   padding: 6px 10px;
