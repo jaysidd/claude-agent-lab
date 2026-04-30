@@ -2152,6 +2152,20 @@ function renderSettings() {
       if (!field.isSecret && current?.hasValue) {
         inp.value = current.preview || "";
       }
+      // Dirty-state cue: amber border once the user types, cleared after save.
+      inp.addEventListener("input", () => {
+        inp.classList.add("dirty");
+        // Mark the section as dirty so per-section save / auto-save-on-test
+        // can detect it in O(1) without re-scanning all inputs.
+        secEl.dataset.dirty = "1";
+        // Reset the "✓ Saved" affordance on the per-section button so
+        // future save state is honest.
+        const saveBtn = secEl.querySelector(".btn-save-section");
+        if (saveBtn) {
+          saveBtn.classList.remove("saved");
+          saveBtn.textContent = "Save section";
+        }
+      });
       fieldEl.appendChild(inp);
 
       if (field.isSecret && current?.hasValue) {
@@ -2171,60 +2185,85 @@ function renderSettings() {
       secEl.appendChild(fieldEl);
     }
 
-    // Per-section Test Connection button
-    if (section.section.startsWith("WhisprDesk")) {
-      const testBtn = document.createElement("button");
-      testBtn.className = "btn-test";
-      testBtn.type = "button";
-      testBtn.textContent = "Test connection";
-      testBtn.addEventListener("click", () => testWhisprDesk(secEl));
-      secEl.appendChild(testBtn);
+    // Per-section action row: Save section + Test connection (where applicable).
+    // Lets operators commit their edits without scrolling to the modal-bottom
+    // global Save. The Test button auto-saves dirty fields first so the
+    // common "type token → click Test" flow Just Works.
+    if (!section.disabled) {
+      const actions = document.createElement("div");
+      actions.className = "section-actions";
+
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "btn-save-section";
+      saveBtn.type = "button";
+      saveBtn.textContent = "Save section";
+      saveBtn.addEventListener("click", () => saveSection(secEl));
+      actions.appendChild(saveBtn);
+
+      if (section.section.startsWith("WhisprDesk")) {
+        const testBtn = document.createElement("button");
+        testBtn.className = "btn-test";
+        testBtn.type = "button";
+        testBtn.textContent = "Test connection";
+        testBtn.addEventListener("click", () => testWhisprDesk(secEl));
+        actions.appendChild(testBtn);
+      }
+      if (section.section.startsWith("Telegram")) {
+        const testBtn = document.createElement("button");
+        testBtn.className = "btn-test";
+        testBtn.type = "button";
+        testBtn.textContent = "Test connection";
+        testBtn.addEventListener("click", () => testTelegram(secEl));
+        actions.appendChild(testBtn);
+      }
+
+      secEl.appendChild(actions);
+
       const result = document.createElement("div");
       result.dataset.role = "test-result";
       secEl.appendChild(result);
-    }
-    if (section.section.startsWith("Telegram")) {
-      const testBtn = document.createElement("button");
-      testBtn.className = "btn-test";
-      testBtn.type = "button";
-      testBtn.textContent = "Test connection";
-      testBtn.addEventListener("click", () => testTelegram(secEl));
-      secEl.appendChild(testBtn);
-      const result = document.createElement("div");
-      result.dataset.role = "test-result";
-      secEl.appendChild(result);
-      // Surface the listener's live status when the section first renders
-      // so the operator sees ● connected / ⚠ auth_failed / etc. without
-      // having to click Test.
-      refreshTelegramStatusInto(result);
+
+      if (section.section.startsWith("Telegram")) {
+        // Surface the listener's live status on first render so the
+        // operator sees ● connected / ⚠ auth_failed without having to
+        // click Test.
+        refreshTelegramStatusInto(result);
+      }
     }
 
     settingsSectionsEl.appendChild(secEl);
   }
 }
 
-async function saveSettings() {
+// Collect editable settings entries from a scope (whole modal or a single
+// section). Returns the array of {key, value, isSecret} entries that should
+// be POSTed. Secret fields with empty values are skipped (preserves existing
+// secret); non-secret fields with empty values clear the DB row if one
+// existed previously.
+function collectSettingsEntriesFrom(scopeEl) {
   const entries = [];
-  for (const inp of settingsSectionsEl.querySelectorAll("[data-key]")) {
-    if (inp.dataset.disabled === "1") continue; // skip disabled sections
+  for (const inp of scopeEl.querySelectorAll("[data-key]")) {
+    if (inp.dataset.disabled === "1") continue;
     const key = inp.dataset.key;
     const isSecret = inp.dataset.secret === "1";
     const value = inp.value;
     if (isSecret) {
-      // Only send if user typed something new
       if (value.trim()) entries.push({ key, value: value.trim(), isSecret: true });
     } else {
-      // Non-secret fields always sent (even empty = reset to env fallback)
       const prev = settingsState.values.find((v) => v.key === key);
       if (value.trim()) {
         entries.push({ key, value: value.trim(), isSecret: false });
       } else if (prev?.hasValue) {
-        entries.push({ key, value: null }); // clear
+        entries.push({ key, value: null });
       }
     }
   }
-  settingsSaveBtn.disabled = true;
-  settingsSaveBtn.textContent = "Saving…";
+  return entries;
+}
+
+// Submit a batch of entries, handle the response, and re-probe statuses.
+// Returns true on success. Reports errors via alert.
+async function postSettingsEntries(entries) {
   try {
     const res = await fetch("/api/settings", {
       method: "POST",
@@ -2233,21 +2272,120 @@ async function saveSettings() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
-    await loadSettings();
-    renderSettings();
-    // Re-probe WhisprDesk after save, since token may now be set
-    await refreshWhisprDeskStatus();
+    return true;
   } catch (err) {
     alert("Could not save settings: " + err.message);
+    return false;
+  }
+}
+
+// Whole-modal save (the Save changes button at the modal bottom). Same
+// behavior as before — collects every editable input, POSTs, re-renders.
+async function saveSettings() {
+  const entries = collectSettingsEntriesFrom(settingsSectionsEl);
+  settingsSaveBtn.disabled = true;
+  settingsSaveBtn.textContent = "Saving…";
+  try {
+    const ok = await postSettingsEntries(entries);
+    if (!ok) return;
+    await loadSettings();
+    renderSettings();
+    await refreshWhisprDeskStatus();
   } finally {
     settingsSaveBtn.disabled = false;
     settingsSaveBtn.textContent = "Save changes";
   }
 }
 
+// Per-section save — wired to the inline "Save section" button. Saves only
+// fields within secEl. After success, clears dirty cues on the section's
+// inputs and flashes the button "✓ Saved" briefly. Re-renders ONLY this
+// section's metadata (envFallback indicators, "saved in db" labels) by
+// re-fetching settings — full-modal re-render would lose focus / cursor
+// position on whichever input the user was about to interact with next.
+async function saveSection(secEl) {
+  const entries = collectSettingsEntriesFrom(secEl);
+  const saveBtn = secEl.querySelector(".btn-save-section");
+  if (!saveBtn) return false;
+  if (entries.length === 0) {
+    // Nothing to save — flash a quick "Up to date" hint instead of "Saved".
+    saveBtn.classList.add("saved");
+    saveBtn.textContent = "✓ Up to date";
+    setTimeout(() => {
+      saveBtn.classList.remove("saved");
+      saveBtn.textContent = "Save section";
+    }, 1500);
+    return true;
+  }
+  saveBtn.disabled = true;
+  const originalText = saveBtn.textContent;
+  saveBtn.textContent = "Saving…";
+  try {
+    const ok = await postSettingsEntries(entries);
+    if (!ok) {
+      saveBtn.textContent = originalText;
+      return false;
+    }
+    // Reload settings into state so the next-render meta labels are correct,
+    // then clear dirty cues on this section's inputs without rebuilding the
+    // whole modal.
+    await loadSettings();
+    secEl.dataset.dirty = "0";
+    secEl.querySelectorAll("[data-key]").forEach((inp) => {
+      inp.classList.remove("dirty");
+      // Secret inputs auto-clear after save (matching old whole-modal behavior).
+      if (inp.dataset.secret === "1") inp.value = "";
+    });
+    saveBtn.classList.add("saved");
+    saveBtn.textContent = "✓ Saved";
+    setTimeout(() => {
+      // Only revert the label if no new dirty edits arrived in the meantime.
+      if (secEl.dataset.dirty !== "1") {
+        saveBtn.classList.remove("saved");
+        saveBtn.textContent = "Save section";
+      }
+    }, 2000);
+    // Probe integration statuses if relevant (telegram restart fires
+    // server-side; surface the new status inline).
+    const result = secEl.querySelector("[data-role='test-result']");
+    if (result && secEl.querySelector(".btn-save-section")) {
+      const heading = secEl.querySelector("h3, h4, .section-title")?.textContent ?? "";
+      if (/Telegram/i.test(heading) || /WhisprDesk/i.test(heading)) {
+        // Tiny delay so the server-side restartTelegram() has time to do
+        // its first getMe() probe before we read /api/telegram/status.
+        setTimeout(() => {
+          if (/Telegram/i.test(heading)) refreshTelegramStatusInto(result);
+        }, 500);
+      }
+    }
+    return true;
+  } finally {
+    saveBtn.disabled = false;
+  }
+}
+
+// Used by Test connection buttons: if the section has dirty fields, save
+// them first so the test runs against the latest values. Returns true if
+// the section is clean / save succeeded; false if the save failed and the
+// caller should bail out of the test.
+async function ensureSectionSavedBeforeTest(secEl) {
+  if (secEl.dataset.dirty !== "1") return true;
+  return await saveSection(secEl);
+}
+
 async function testTelegram(secEl) {
   const result = secEl.querySelector("[data-role='test-result']");
+  // Save dirty fields first so a fresh token/allowlist is what gets tested.
+  // The user's mental model is "I typed a token, then clicked Test" — they
+  // shouldn't have to also remember to save first.
   result.className = "settings-test-result";
+  result.textContent = "Saving…";
+  const saved = await ensureSectionSavedBeforeTest(secEl);
+  if (!saved) {
+    result.classList.add("err");
+    result.textContent = "Could not save before testing — fix the error above and retry.";
+    return;
+  }
   result.textContent = "Testing…";
   try {
     const res = await fetch("/api/telegram/test", { method: "POST" });
@@ -2305,6 +2443,13 @@ async function refreshTelegramStatusInto(resultEl) {
 async function testWhisprDesk(secEl) {
   const result = secEl.querySelector("[data-role='test-result']");
   result.className = "settings-test-result";
+  result.textContent = "Saving…";
+  const saved = await ensureSectionSavedBeforeTest(secEl);
+  if (!saved) {
+    result.classList.add("err");
+    result.textContent = "Could not save before testing — fix the error above and retry.";
+    return;
+  }
   result.textContent = "Testing…";
   try {
     const res = await fetch("/api/whisprdesk/status");
