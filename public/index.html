@@ -65,6 +65,27 @@
           <button id="memory-btn" type="button" title="Open persistent memory">
             🧠 Memory <span id="memory-count" class="tasks-count">0</span>
           </button>
+        </div>
+      </header>
+      <section id="messages"></section>
+      <!-- Composer toolbar: the controls you reach for while working live right
+           above the input (ChatGPT/Claude pattern), not up in the top header. -->
+      <div id="composer-toolbar">
+        <div class="toolbar-group toolbar-left">
+          <select id="model-select" title="Model for this agent"></select>
+          <label id="plan-toggle" title="Plan mode: read-only agent run (no tool execution)">
+            <input id="plan-checkbox" type="checkbox" />
+            <span>Plan</span>
+          </label>
+          <button id="reset-btn" type="button" title="Start a new conversation with this agent">＋ New chat</button>
+        </div>
+        <div class="toolbar-group toolbar-right">
+          <button id="tasks-btn" type="button" title="Open task board">
+            📋 Tasks <span id="tasks-count" class="tasks-count">0</span>
+          </button>
+          <button id="schedules-btn" type="button" title="Cron-style scheduled agent runs">
+            🕒 Schedules <span id="schedules-count" class="tasks-count">0</span>
+          </button>
           <button id="pins-btn" type="button" title="Context pins — files/snippets injected into this agent's prompt">
             📌 Pins <span id="pins-count" class="tasks-count">0</span>
           </button>
@@ -74,21 +95,8 @@
           <button id="skills-btn" type="button" title="Skills — enable .claude/skills per agent">
             🧩 Skills <span id="skills-count" class="tasks-count">0</span>
           </button>
-          <button id="tasks-btn" type="button" title="Open task board">
-            📋 Tasks <span id="tasks-count" class="tasks-count">0</span>
-          </button>
-          <button id="schedules-btn" type="button" title="Cron-style scheduled agent runs">
-            🕒 Schedules <span id="schedules-count" class="tasks-count">0</span>
-          </button>
-          <label id="plan-toggle" title="Plan mode: read-only agent run (no tool execution)">
-            <input id="plan-checkbox" type="checkbox" />
-            <span>Plan</span>
-          </label>
-          <select id="model-select" title="Model for this agent"></select>
-          <button id="reset-btn" title="Start a new conversation with this agent">New chat</button>
         </div>
-      </header>
-      <section id="messages"></section>
+      </div>
       <form id="composer">
         <div class="composer-wrap">
           <textarea
