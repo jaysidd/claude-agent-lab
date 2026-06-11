@@ -372,18 +372,89 @@
           <button id="skills-close" type="button">×</button>
         </header>
         <div class="modal-body">
-          <p class="modal-intro">
-            <a href="https://code.claude.com/docs/en/skills" target="_blank" rel="noopener">Agent Skills</a>
-            discovered in <code id="skills-cwd">…</code><code>/.claude/skills</code> and
-            <code>~/.claude/skills</code>. Enable a skill for an agent and it loads into that
-            agent's system prompt on every turn. Add new skills by dropping a
-            <code>SKILL.md</code> into a skills folder, then reopen this panel.
-          </p>
-          <div class="task-create-row" style="margin-bottom: 10px">
-            <select id="skill-agent" title="Which agent gets these skills"></select>
-            <button id="skills-refresh-btn" class="btn-test" type="button">↻ Rescan</button>
+          <div class="skills-tabs">
+            <button id="skills-tab-installed" class="skills-tab active" type="button">Installed</button>
+            <button id="skills-tab-add" class="skills-tab" type="button">＋ Add a skill</button>
           </div>
-          <ul id="skills-list"></ul>
+
+          <!-- Installed tab -->
+          <div id="skills-pane-installed">
+            <p class="modal-intro">
+              <a href="https://code.claude.com/docs/en/skills" target="_blank" rel="noopener">Agent Skills</a>
+              discovered in <code id="skills-cwd">…</code><code>/.claude/skills</code> and
+              <code>~/.claude/skills</code>. Enable a skill for an agent and it loads into that
+              agent's system prompt on every turn. Skills you install here live in your
+              user skills folder and can be removed with 🗑.
+            </p>
+            <div class="task-create-row" style="margin-bottom: 10px">
+              <select id="skill-agent" title="Which agent gets these skills"></select>
+              <button id="skills-refresh-btn" class="btn-test" type="button">↻ Rescan</button>
+            </div>
+            <ul id="skills-list"></ul>
+          </div>
+
+          <!-- Add tab -->
+          <div id="skills-pane-add" class="hidden">
+            <p class="modal-intro">
+              Add a skill three ways. Everything you add installs to
+              <code>~/.claude/skills</code> as a standard
+              <code>SKILL.md</code> — no external registry, no off-device upload.
+              Pasted skills are scanned for risky patterns before install.
+            </p>
+            <div class="skills-source-tabs">
+              <button class="skills-source-tab active" data-source="builder" type="button">🛠 Skill Builder</button>
+              <button class="skills-source-tab" data-source="starter" type="button">📦 Starter pack</button>
+              <button class="skills-source-tab" data-source="paste" type="button">📋 Paste SKILL.md</button>
+            </div>
+
+            <!-- Builder -->
+            <div id="skills-src-builder" class="skills-src">
+              <div class="field-block">
+                <label class="field-label" for="skill-build-name">Name</label>
+                <input id="skill-build-name" type="text" placeholder="commit-helper" />
+              </div>
+              <div class="field-block">
+                <label class="field-label" for="skill-build-desc">Description (when should the agent use this?)</label>
+                <textarea id="skill-build-desc" rows="2" placeholder="Write clear git commit messages. Use when the user asks to commit changes."></textarea>
+              </div>
+              <div class="field-block">
+                <label class="field-label" for="skill-build-tools">Allowed tools (comma-separated, optional)</label>
+                <input id="skill-build-tools" type="text" placeholder="Bash, Read, Write" />
+              </div>
+              <div class="field-block">
+                <label class="field-label" for="skill-build-body">Instructions</label>
+                <textarea id="skill-build-body" rows="7" placeholder="# Commit Helper&#10;&#10;You help the user write clear commit messages…"></textarea>
+              </div>
+            </div>
+
+            <!-- Starter pack -->
+            <div id="skills-src-starter" class="skills-src hidden">
+              <ul id="skills-starter-list"></ul>
+            </div>
+
+            <!-- Paste -->
+            <div id="skills-src-paste" class="skills-src hidden">
+              <div class="field-block">
+                <label class="field-label" for="skill-paste-raw">Paste a full SKILL.md (frontmatter + instructions)</label>
+                <textarea id="skill-paste-raw" rows="10" placeholder="---&#10;name: my-skill&#10;description: …&#10;allowed-tools: Read, Bash&#10;---&#10;&#10;# My Skill&#10;…"></textarea>
+              </div>
+            </div>
+
+            <!-- Scan results + install (shared by builder + paste) -->
+            <div id="skills-scan-block" class="hidden">
+              <div id="skills-scan-summary" class="skills-scan-summary"></div>
+              <ul id="skills-scan-findings"></ul>
+              <label id="skills-trust-row" class="mcp-toggle hidden" style="margin-top:6px;">
+                <input id="skills-trust" type="checkbox" /> I've reviewed this skill and trust the source
+              </label>
+            </div>
+
+            <div class="modal-actions" id="skills-add-actions">
+              <span id="skills-add-status" class="field-help" style="margin:0;"></span>
+              <button id="skills-scan-btn" class="btn-test" type="button">Scan</button>
+              <button id="skills-install-btn" class="btn-primary" type="button">Install</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>

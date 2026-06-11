@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-79_passing-6ee7b7)](./tests)
+[![Tests](https://img.shields.io/badge/tests-87_passing-6ee7b7)](./tests)
 
 A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. **Durable SQLite-backed task queue** with atomic checkout and lease-based crash recovery. **Cron-style scheduler** that wakes agents on a schedule. **Per-task approval gates** that pause dangerous tools for sign-off. **Per-agent budget caps** (cost + rate) enforced before every SDK call. **Context pins**, **MCP servers**, and **Skills** configurable per agent. A **Telegram bridge** so you can drive the same agents from your phone. Token-by-token streaming, folder scoping, `@file` / `/command` autocomplete, persistent SQLite memory, conversation history with restore-and-resume, OAuth-aware cost tracking, Markdown / JSON export, a ⌘K command palette, and voice I/O via [WhisprDesk](https://whisprdesk.com/).
 
@@ -48,7 +48,7 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [MCP servers](#mcp-servers) | Per-agent stdio/http/sse MCP servers → `options.mcpServers`; tools light up |
 | [Browser automation](#browser-automation) | Per-agent Playwright browser behind an allow-list + private-IP `PreToolUse` gate |
 | [Agent personality](#agent-personality) | Per-agent voice (Soul Builder) layered over locked privacy/boundary guardrails |
-| [Skills](#skills) | Per-agent toggle of `.claude/skills/*` via `settingSources` + `skills` filter |
+| [Skills](#skills) | Per-agent toggle of `.claude/skills/*`; **Skills Studio** builds/installs/scans skills (no ClawHub, no cloud upload) |
 | [Telegram bridge](#telegram-bridge) | Long-poll listener routes DMs to the same agents; allowlist-gated |
 | [Markdown rendering](#markdown-rendering) | Not SDK — `marked` + `DOMPurify` + `highlight.js` on completed replies |
 | [Persistent memory (SQLite)](#persistent-memory-sqlite) | Injected into `systemPrompt` on every call |
@@ -401,6 +401,8 @@ The safety pattern is the point: a personality is **editable tone over locked gu
 ### Skills
 
 Enable [Agent Skills](https://code.claude.com/docs/en/skills) per agent. [`src/skills.ts`](src/skills.ts) scans `{cwd}/.claude/skills/*/SKILL.md` and `~/.claude/skills/*` (parsing each frontmatter), and when an agent has ≥1 skill enabled, runs its `query()` with `settingSources: ['project','user']` + a `skills` name filter. The 🧩 **Skills** modal lists discovered skills with a per-agent toggle + Rescan. Routes: `GET /api/skills`, `POST /api/skills/toggle`.
+
+**Skills Studio** (the **＋ Add a skill** tab) creates skills without leaving the app — a **Skill Builder** form, a bundled **starter pack** (commit-helper, changelog-writer, code-explainer), or **paste a SKILL.md**. Everything installs a standard `SKILL.md` into `~/.claude/skills` ([`src/skillInstall.ts`](src/skillInstall.ts)); installed skills get a 🗑 delete. Pasted (external) content runs through a **static security scan** — a heuristic lint flagging curl-pipe-shell, `rm -rf`, reverse shells, credential reads — and a high-severity finding blocks install behind an "I reviewed this" gate the server enforces too. Deliberately **not ported from Clawless**: the ClawHub registry (its OpenClaw tool vocabulary `fs_write_file`/`cmd_bash` doesn't exist in the SDK, so those skills would load broken) and VirusTotal (useless on instruction text + would upload your skill off-device, breaking the privacy promise). Every write/delete is path-confined to the skills root (resolve + prefix-check, same floor as the browser SSRF gate); folder names are `[a-z0-9-]` only. Routes: `POST /api/skills/{scan,install}`, `GET /api/skills/starter`, `DELETE /api/skills/:slug`. See the [user guide](docs/guide/skills.md).
 
 ---
 

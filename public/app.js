@@ -1771,6 +1771,7 @@ function populateSkillAgentSelect() {
 
 async function openSkillsModal() {
   populateSkillAgentSelect();
+  switchSkillsTab("installed");
   await refreshSkills();
   skillsModal.classList.remove("hidden");
 }
@@ -1835,9 +1836,50 @@ function renderSkills() {
     cb.addEventListener("change", () => toggleSkill(s.name, cb.checked));
     toggle.append(cb, document.createTextNode(" enabled for this agent"));
 
+    // Skills installed in the user folder (Skills Studio's target) can be
+    // removed; project-source skills are managed on disk and aren't deletable.
+    if (s.deletable) {
+      const del = document.createElement("button");
+      del.className = "memory-delete skill-delete";
+      del.title = "Remove this skill from ~/.claude/skills";
+      del.textContent = "🗑";
+      del.addEventListener("click", () => deleteInstalledSkill(s));
+      meta.appendChild(del);
+    }
+
     li.append(meta, desc, toggle);
     skillsList.appendChild(li);
   }
+}
+
+async function deleteInstalledSkill(skill) {
+  if (!confirm(`Remove the skill "${skill.name}"? This deletes its folder from ~/.claude/skills.`)) {
+    return;
+  }
+  // The directory slug is derived from the name; the server re-derives + guards
+  // it, so sending the lowercased/hyphenated form is fine.
+  const slug = skillSlug(skill.name);
+  try {
+    const res = await fetch(`/api/skills/${encodeURIComponent(slug)}`, { method: "DELETE" });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    await refreshSkills();
+  } catch (err) {
+    alert("Could not remove skill: " + err.message);
+  }
+}
+
+// Mirror of the server's slugify so the delete route receives the directory
+// name (server re-derives + path-guards regardless).
+function skillSlug(name) {
+  return (name || "")
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
 }
 
 async function toggleSkill(skillName, enabled) {
@@ -1869,6 +1911,246 @@ async function refreshSkillsCount() {
     skillsCount.classList.toggle("has-active", n > 0);
   } catch {
     /* noop */
+  }
+}
+
+// ----- Skills Studio: tabs, sources, scan + install -----
+
+const skillsTabInstalled = document.getElementById("skills-tab-installed");
+const skillsTabAdd = document.getElementById("skills-tab-add");
+const skillsPaneInstalled = document.getElementById("skills-pane-installed");
+const skillsPaneAdd = document.getElementById("skills-pane-add");
+const skillsSourceTabs = Array.from(document.querySelectorAll(".skills-source-tab"));
+const skillsScanBlock = document.getElementById("skills-scan-block");
+const skillsScanSummary = document.getElementById("skills-scan-summary");
+const skillsScanFindings = document.getElementById("skills-scan-findings");
+const skillsTrustRow = document.getElementById("skills-trust-row");
+const skillsTrust = document.getElementById("skills-trust");
+const skillsScanBtn = document.getElementById("skills-scan-btn");
+const skillsInstallBtn = document.getElementById("skills-install-btn");
+const skillsAddStatus = document.getElementById("skills-add-status");
+const skillsStarterList = document.getElementById("skills-starter-list");
+
+let skillSource = "builder"; // builder | starter | paste
+let lastScan = null; // most recent ScanResult for the current content
+
+function switchSkillsTab(tab) {
+  const onAdd = tab === "add";
+  skillsTabInstalled.classList.toggle("active", !onAdd);
+  skillsTabAdd.classList.toggle("active", onAdd);
+  skillsPaneInstalled.classList.toggle("hidden", onAdd);
+  skillsPaneAdd.classList.toggle("hidden", !onAdd);
+  if (onAdd) loadStarterSkills();
+}
+skillsTabInstalled.addEventListener("click", () => switchSkillsTab("installed"));
+skillsTabAdd.addEventListener("click", () => switchSkillsTab("add"));
+
+function switchSkillSource(src) {
+  skillSource = src;
+  for (const t of skillsSourceTabs) t.classList.toggle("active", t.dataset.source === src);
+  document.getElementById("skills-src-builder").classList.toggle("hidden", src !== "builder");
+  document.getElementById("skills-src-starter").classList.toggle("hidden", src !== "starter");
+  document.getElementById("skills-src-paste").classList.toggle("hidden", src !== "paste");
+  // Starter installs one-click; scan/install buttons only apply to builder+paste.
+  document.getElementById("skills-add-actions").classList.toggle("hidden", src === "starter");
+  resetScanUI();
+}
+for (const t of skillsSourceTabs) {
+  t.addEventListener("click", () => switchSkillSource(t.dataset.source));
+}
+
+function resetScanUI() {
+  lastScan = null;
+  skillsScanBlock.classList.add("hidden");
+  skillsScanFindings.innerHTML = "";
+  skillsScanSummary.textContent = "";
+  skillsScanSummary.className = "skills-scan-summary";
+  skillsTrustRow.classList.add("hidden");
+  skillsTrust.checked = false;
+  skillsAddStatus.textContent = "";
+}
+
+// Collect the content to scan/install from whichever source form is active.
+function collectSkillContent() {
+  if (skillSource === "paste") {
+    const raw = document.getElementById("skill-paste-raw").value;
+    return { raw, scanText: raw };
+  }
+  // builder
+  const name = document.getElementById("skill-build-name").value;
+  const description = document.getElementById("skill-build-desc").value;
+  const allowedTools = document
+    .getElementById("skill-build-tools")
+    .value.split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const body = document.getElementById("skill-build-body").value;
+  return {
+    fields: { name, description, allowedTools, body },
+    scanText: `${name}\n${description}\n${allowedTools.join(" ")}\n${body}`,
+  };
+}
+
+async function runSkillScan() {
+  const { scanText } = collectSkillContent();
+  if (!scanText.trim()) {
+    skillsAddStatus.textContent = "Nothing to scan yet.";
+    return null;
+  }
+  try {
+    const res = await fetch("/api/skills/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: scanText }),
+    });
+    lastScan = await res.json();
+    renderScan(lastScan);
+    return lastScan;
+  } catch (err) {
+    skillsAddStatus.textContent = "Scan failed: " + err.message;
+    return null;
+  }
+}
+skillsScanBtn.addEventListener("click", runSkillScan);
+
+function renderScan(scan) {
+  skillsScanBlock.classList.remove("hidden");
+  skillsScanFindings.innerHTML = "";
+  const sev = scan.maxSeverity;
+  if (!sev) {
+    skillsScanSummary.textContent = "✓ Scan clean — no risky patterns found.";
+    skillsScanSummary.className = "skills-scan-summary clean";
+  } else {
+    const n = scan.findings.length;
+    skillsScanSummary.textContent = `⚠ ${n} finding${n === 1 ? "" : "s"} — highest severity: ${sev}. This is a heuristic lint, not a guarantee; review before installing.`;
+    skillsScanSummary.className = `skills-scan-summary ${sev}`;
+  }
+  for (const f of scan.findings) {
+    const li = document.createElement("li");
+    li.className = `scan-finding ${f.severity}`;
+    const rule = document.createElement("span");
+    rule.className = "scan-rule";
+    rule.textContent = `${f.severity.toUpperCase()} · ${f.rule} (line ${f.line})`;
+    const snip = document.createElement("code");
+    snip.className = "scan-snippet";
+    snip.textContent = f.snippet;
+    li.append(rule, snip);
+    skillsScanFindings.appendChild(li);
+  }
+  // The trust gate only applies to PASTE (untrusted external content) with a
+  // HIGH finding. Builder content is first-party — scan is informational only.
+  const needsTrust = skillSource === "paste" && sev === "high";
+  skillsTrustRow.classList.toggle("hidden", !needsTrust);
+}
+
+async function installSkill() {
+  // Always scan first so the gate has fresh findings.
+  const scan = await runSkillScan();
+  const content = collectSkillContent();
+
+  const payload = { source: skillSource };
+  if (skillSource === "paste") {
+    payload.raw = content.raw;
+    if (scan && scan.maxSeverity === "high") {
+      if (!skillsTrust.checked) {
+        skillsAddStatus.textContent = "Tick the review box to install a skill with high-severity findings.";
+        return;
+      }
+      payload.acknowledged = true;
+    }
+  } else {
+    Object.assign(payload, content.fields);
+  }
+
+  skillsInstallBtn.disabled = true;
+  skillsAddStatus.textContent = "Installing…";
+  try {
+    const res = await fetch("/api/skills/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    skillsAddStatus.textContent = `Installed "${data.skill.name}" ✓`;
+    clearSkillForms();
+    resetScanUI();
+    await refreshSkills(); // reflect in the Installed tab
+  } catch (err) {
+    skillsAddStatus.textContent = "Install failed: " + err.message;
+  } finally {
+    skillsInstallBtn.disabled = false;
+  }
+}
+skillsInstallBtn.addEventListener("click", installSkill);
+
+function clearSkillForms() {
+  for (const id of ["skill-build-name", "skill-build-desc", "skill-build-tools", "skill-build-body", "skill-paste-raw"]) {
+    const el = document.getElementById(id);
+    if (el) el.value = "";
+  }
+}
+
+async function loadStarterSkills() {
+  if (!skillsStarterList) return;
+  try {
+    const res = await fetch("/api/skills/starter");
+    const data = await res.json();
+    renderStarters(data.starters || []);
+  } catch {
+    skillsStarterList.innerHTML = "";
+  }
+}
+
+function renderStarters(starters) {
+  skillsStarterList.innerHTML = "";
+  if (starters.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "col-empty";
+    empty.textContent = "No starter skills bundled.";
+    skillsStarterList.appendChild(empty);
+    return;
+  }
+  for (const s of starters) {
+    const li = document.createElement("li");
+    li.className = "memory-card skill-card";
+    const meta = document.createElement("div");
+    meta.className = "memory-meta";
+    const name = document.createElement("span");
+    name.className = "memory-scope";
+    name.textContent = s.name;
+    meta.appendChild(name);
+    const btn = document.createElement("button");
+    btn.className = "btn-test skill-delete";
+    btn.textContent = s.installed ? "Installed ✓" : "Install";
+    btn.disabled = s.installed;
+    btn.addEventListener("click", () => installStarter(s.id, btn));
+    meta.appendChild(btn);
+    const desc = document.createElement("div");
+    desc.className = "memory-content";
+    desc.textContent = s.description || "";
+    li.append(meta, desc);
+    skillsStarterList.appendChild(li);
+  }
+}
+
+async function installStarter(id, btn) {
+  btn.disabled = true;
+  btn.textContent = "Installing…";
+  try {
+    const res = await fetch("/api/skills/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: "starter", starterId: id }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    btn.textContent = "Installed ✓";
+    await refreshSkills();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Install";
+    alert("Could not install starter: " + err.message);
   }
 }
 
