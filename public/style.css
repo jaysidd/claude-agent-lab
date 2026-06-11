@@ -578,11 +578,48 @@ body {
 }
 
 /* Composer */
+/* Composer toolbar — per-conversation controls + capability panels live here,
+   directly above the input (ChatGPT/Claude pattern) instead of the top header. */
+#composer-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 28px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  flex-wrap: wrap;
+}
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.toolbar-right { justify-content: flex-end; }
+/* One consistent pill style for every toolbar button (id selector + element
+   beats the older per-button id rules, so tasks/schedules/pins/mcp/skills/
+   new-chat all match). */
+#composer-toolbar button {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+#composer-toolbar button:hover { border-color: var(--accent); }
+#composer-toolbar #reset-btn { color: var(--text); }
+
 #composer {
   display: flex;
   gap: 10px;
-  padding: 16px 28px 22px;
-  border-top: 1px solid var(--border);
+  padding: 14px 28px 22px;
   background: var(--bg);
   align-items: flex-end;
   position: relative;
