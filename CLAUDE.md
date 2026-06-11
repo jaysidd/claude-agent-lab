@@ -140,11 +140,12 @@ When wrapping a session, spawn Performance Analyst and Security Analyst as backg
 After any major change, update before the session ends:
 
 1. **`README.md`** — keep it from falling behind. When you ship a **user-facing feature**, update: the **tests badge** (`tests-N_passing`), the **LOC line**, the **Features-at-a-glance table** (+ a short `### section` so the anchor link works), and the **"What's on the backlog"** section. The mechanical part is guarded: `npm run check:readme` exits non-zero if the test badge ≠ the actual test count — run it before opening a PR (it's also wired as a Stop hook when present in `.claude/settings.json`).
-2. **`.notes/handoff.md`** *(private, gitignored)* — current state, what changed this session, what's next
-3. **`backlog.md`** — move completed items to Done, add new items discovered during work
-4. **`architecture.md`** — new design decisions, updated file map
-5. **`docs/case-studies/`** *(public, when useful)* — case studies for patterns discovered, iteration loops, decisions worth documenting
-6. **`.notes/drafts/`** *(private, gitignored, when useful)* — LinkedIn / blog drafts per session. Style: measured optimism, personal reflection, ends with a question.
+2. **`docs/guide/`** — the user-facing guide corpus (one page per feature surface, modeled on Clawless's knowledge base). When you ship a **new user-facing surface**, add its `docs/guide/<slug>.md` page (use the per-page template: `[Live]` badge → What this is → How to use it → How it works → Common questions → Where to go next; warm second-person voice, no em-dashes) and link it from `docs/guide/README.md`. Docs ship *with* the feature, not after.
+3. **`.notes/handoff.md`** *(private, gitignored)* — current state, what changed this session, what's next
+4. **`backlog.md`** — move completed items to Done, add new items discovered during work
+5. **`architecture.md`** — new design decisions, updated file map
+6. **`docs/case-studies/`** *(public, when useful)* — case studies for patterns discovered, iteration loops, decisions worth documenting
+7. **`.notes/drafts/`** *(private, gitignored, when useful)* — LinkedIn / blog drafts per session. Style: measured optimism, personal reflection, ends with a question.
 
 ### What's private vs public
 The `.notes/` directory is gitignored. Anything in there stays on your disk

@@ -11,6 +11,8 @@ All in ~13,900 lines of hand-written code across `src/`, `public/`, and `tests/`
 
 ![Command Center — overview](docs/screenshots/01-overview.png)
 
+> 📖 **New here?** The [**User Guide**](docs/guide/) is a friendly, task-oriented walkthrough of every surface — start with [Getting Started](docs/guide/getting-started.md). This README is the "what and why"; the guide is the "how do I actually use it."
+
 > **This is an educational reference, not a product.** It is designed to be studied, forked, and modified locally. You supply your own Anthropic credentials. There is no hosted version and none is planned. See the [Authentication](#authentication) section for the ToS caveat on claude.ai OAuth and third-party products.
 
 ---
@@ -396,9 +398,12 @@ Run the same agents from your phone. A long-poll listener ([`src/telegram.ts`](s
 
 A ⚙️ **Settings** button in the header opens a modal backed by a SQLite `settings` table (`key`, `value`, `is_secret`, `updated_at`). Every integration surfaces here instead of being hidden behind `.env` edits. Current sections:
 
-- **WhisprDesk** — Gateway URL + Bearer token + live **Test connection** button
 - **Budget (CostGuard)** — cost cap (monthly USD) + rate cap (requests-per-window) + window length. Global defaults plus per-agent overrides. See [Budget caps](#budget-caps-costguard).
-- **Telegram bridge** *(coming soon)* — the fields render with a disabled state and a "coming soon" badge until the C05 bridge ships; saving is deliberately blocked so no one gets the broken-promise experience
+- **Approvals** — production-marked cwds that force [approval gates](#approval-gates) for all tool calls.
+- **WhisprDesk** — Gateway URL + Bearer token + live **Test connection** button
+- **Telegram bridge** — bot token + allowed chat IDs + live **Test connection** button. Saving restarts the listener; see [Telegram bridge](#telegram-bridge).
+
+Each section has its own **Save section** button next to Test connection, and the Test button auto-saves dirty fields first. Edited-but-unsaved inputs get an amber border.
 
 Secrets never round-trip to the browser: the UI shows a masked preview (`••••c123`), leaving a secret field blank keeps the existing value, and the raw token stays server-side for every proxied request. Values saved in the DB override matching env vars automatically — you can still paste tokens into `.env` for headless deploys.
 
