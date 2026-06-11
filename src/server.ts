@@ -123,6 +123,16 @@ import type {
 } from "./scheduler.js";
 import { approvals } from "./approvalsInstance.js";
 import type { Approval } from "./approvals.js";
+import {
+  recordRun,
+  setRunDelivery,
+  deliverResult,
+  listRuns,
+  getDestination,
+  setDestination,
+  clearScheduleData,
+  type Destination,
+} from "./scheduleRuns.js";
 import type {
   HookCallback,
   HookCallbackMatcher,
@@ -1893,6 +1903,7 @@ const OAUTH_DEAD_PATTERN =
 const fireScheduledTask: OnFire = async (
   ctx: FireContext,
 ): Promise<FireOutcome> => {
+  const runStartedAt = Date.now();
   const agent = findAgent(ctx.agentId);
   if (!agent) {
     return { kind: "error", message: `agent ${ctx.agentId} not found` };
@@ -1908,6 +1919,23 @@ const fireScheduledTask: OnFire = async (
     // because cancel is idempotent against terminal states and doesn't burn
     // an attempt — this fire never reached the SDK.
     taskQueue.cancel(ctx.taskId, guard.reason ?? "budget cap reached");
+    // Record a history row so the schedule card's "last: budget exhausted"
+    // status and the History list agree (the card's lastStatus comes from the
+    // FireOutcome below, so omitting this would leave History blank for a fire
+    // the card advertises). No delivery — nothing ran.
+    try {
+      recordRun({
+        scheduleId: ctx.scheduleId,
+        taskId: ctx.taskId,
+        status: "budget_exhausted",
+        error: guard.reason ?? "budget cap reached",
+        startedAt: runStartedAt,
+        finishedAt: Date.now(),
+        delivery: "skipped (budget)",
+      });
+    } catch (err: any) {
+      console.warn(`[scheduler ${ctx.scheduleId}] budget run-history record failed: ${err?.message ?? err}`);
+    }
     return {
       kind: "budget_exhausted",
       reason: guard.reason ?? "budget cap reached",
@@ -2004,6 +2032,36 @@ const fireScheduledTask: OnFire = async (
     );
   }
 
+  // Record the run in this schedule's history + deliver the result to its
+  // destination. Run outcome and delivery outcome are SEPARATE: a successful
+  // run whose Telegram/file delivery fails is still a successful run — the
+  // delivery error is captured on the run row, never thrown out of here.
+  const finishedAt = Date.now();
+  const status = agentError ? "error" : "success";
+  try {
+    const run = recordRun({
+      scheduleId: ctx.scheduleId,
+      taskId: ctx.taskId,
+      status,
+      output: agentError ? null : finalText,
+      error: agentError ? (agentError?.message ?? String(agentError)) : null,
+      costUsd: costUsd ?? null,
+      startedAt: runStartedAt,
+      finishedAt,
+    });
+    const delivery = await deliverResult(ctx.scheduleId, {
+      status,
+      output: agentError ? null : finalText,
+      error: agentError ? (agentError?.message ?? String(agentError)) : null,
+      finishedAt,
+    });
+    setRunDelivery(run.id, delivery);
+  } catch (err: any) {
+    console.warn(
+      `[scheduler ${ctx.scheduleId}] run-history/delivery failed: ${err?.message ?? err}`,
+    );
+  }
+
   if (agentError) {
     const message = agentError?.message ?? String(agentError);
     if (!assistantMessageArrived && OAUTH_DEAD_PATTERN.test(message)) {
@@ -2021,7 +2079,9 @@ scheduler.start();
 // --- Routes ---
 
 function toApiSchedule(s: Schedule) {
-  return s; // wire shape == internal shape for v1; UI computes relative times
+  // Wire shape == internal shape + the host-side destination (kept in a side
+  // table keyed by schedule id, so the scheduler primitive stays untouched).
+  return { ...s, destination: getDestination(s.id) };
 }
 
 app.get("/api/schedules", (_req, res) => {
@@ -2041,6 +2101,17 @@ app.post("/api/schedules", (req, res) => {
       cwd: cwd === undefined ? null : cwd,
       enabled,
     });
+    // Optional result destination at create time (validated by setDestination;
+    // an invalid one rolls the whole create back so we don't leave a schedule
+    // with a half-set destination).
+    if (req.body?.destination && typeof req.body.destination === "object") {
+      try {
+        setDestination(s.id, req.body.destination as Destination);
+      } catch (derr: any) {
+        scheduler.delete(s.id);
+        return res.status(400).json({ error: derr?.message ?? "invalid destination" });
+      }
+    }
     res.json(toApiSchedule(s));
   } catch (err: any) {
     res.status(400).json({ error: err?.message ?? "invalid schedule" });
@@ -2070,7 +2141,32 @@ app.patch("/api/schedules/:id", (req, res) => {
 app.delete("/api/schedules/:id", (req, res) => {
   const ok = scheduler.delete(req.params.id);
   if (!ok) return res.status(404).json({ error: "not found" });
+  // Clear the host-side run history + destination so they don't orphan (the
+  // scheduler primitive doesn't know about these side tables).
+  clearScheduleData(req.params.id);
   res.json({ ok: true });
+});
+
+// Run history for a schedule (most recent first).
+app.get("/api/schedules/:id/runs", (req, res) => {
+  if (!scheduler.get(req.params.id)) return res.status(404).json({ error: "not found" });
+  const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "25"), 10) || 25, 1), 100);
+  res.json({ runs: listRuns(req.params.id, limit) });
+});
+
+// Get / set a schedule's result destination.
+app.get("/api/schedules/:id/destination", (req, res) => {
+  if (!scheduler.get(req.params.id)) return res.status(404).json({ error: "not found" });
+  res.json(getDestination(req.params.id));
+});
+
+app.post("/api/schedules/:id/destination", (req, res) => {
+  if (!scheduler.get(req.params.id)) return res.status(404).json({ error: "not found" });
+  try {
+    res.json(setDestination(req.params.id, (req.body ?? {}) as Destination));
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? "invalid destination" });
+  }
 });
 
 app.post("/api/schedules/:id/run-now", async (req, res) => {

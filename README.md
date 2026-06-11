@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-93_passing-6ee7b7)](./tests)
+[![Tests](https://img.shields.io/badge/tests-100_passing-6ee7b7)](./tests)
 
 A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. **Durable SQLite-backed task queue** with atomic checkout and lease-based crash recovery. **Cron-style scheduler** that wakes agents on a schedule. **Per-task approval gates** that pause dangerous tools for sign-off. **Per-agent budget caps** (cost + rate) enforced before every SDK call. **Context pins**, **MCP servers**, and **Skills** configurable per agent. A **Telegram bridge** so you can drive the same agents from your phone. Token-by-token streaming, folder scoping, `@file` / `/command` autocomplete, persistent SQLite memory, conversation history with restore-and-resume, OAuth-aware cost tracking, Markdown / JSON export, a ⌘K command palette, and voice I/O via [WhisprDesk](https://whisprdesk.com/).
 
@@ -41,7 +41,7 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Per-agent model selection](#per-agent-model-selection) | `model: "claude-opus-4-8" \| "claude-sonnet-4-6" \| "claude-haiku-4-5"` |
 | [Task queue with auto-routing](#task-queue-with-auto-routing) | One-shot Haiku `query()` as a classifier |
 | [Durable task queue (SQLite + atomic checkout)](#durable-task-queue) | Tasks survive restart; lease-based crash recovery; concurrent-safe checkout |
-| [Cron-style scheduler](#scheduler) | `node`-side tick loop fires `query()` on a cron; OAuth-rotation healthcheck |
+| [Cron-style scheduler](#scheduler) | `node`-side tick loop fires `query()` on a cron; OAuth-rotation healthcheck; **result destinations** (in-app/file/telegram) + **run history** |
 | [Per-task approval gates](#approval-gates) | `PreToolUse` hook awaits operator approve/reject before dangerous tools run |
 | [Budget caps (CostGuard)](#budget-caps-costguard) | Preflight `check()` before every `query()`; cost cap + rate cap; OAuth-aware |
 | [Context pins](#context-pins) | Per-agent file/snippet auto-injected into the system prompt; files re-read live |
@@ -359,6 +359,8 @@ sequenceDiagram
 A cron-style scheduler ([`src/scheduler.ts`](src/scheduler.ts), host-agnostic) wakes a chosen agent on a schedule. A single 30 s tick loop fires any due schedule as a normal `query()` call, routed through the durable task queue and CostGuard preflight. Schedules survive restart (SQLite `schedules` table + partial index), can be paused/resumed/run-now, and show a live "next 3 fires" preview from [`cron-parser`](https://www.npmjs.com/package/cron-parser).
 
 The novel bit vs a plain cron is **OAuth-rotation handling**: when the SDK reports the OAuth session is dead, the schedule auto-pauses (`paused_reason: 'oauth_unavailable'`) instead of looping errors at 3 AM. A 3-strike fallback auto-pauses on recurring non-OAuth failures too. Routes: `GET/POST /api/schedules`, `PATCH/DELETE /api/schedules/:id`, `POST /api/schedules/:id/{run-now,pause,resume}`, `POST /api/cron/preview`.
+
+**Result destinations + run history** ([`src/scheduleRuns.ts`](src/scheduleRuns.ts), host-side side tables so the scheduler primitive stays untouched): every fire is recorded in a per-schedule **run history** (status + full output transcript + delivery result, most-recent-N retained, viewable via a **History** expander), and each schedule routes its output to a **destination** — `in-app` (history only), `file`, or `telegram` (reuses the C05 bridge). The advisor's architect-gate call shaped the file destination: a scheduled run is *unattended* and its output can carry browser-fetched content, so writing it to a file is a write-side egress of attacker-influenceable text — file output is therefore **confined to `~/.claude-agent-lab/reports/`** (resolve + prefix-check, same floor as the browser/skills gates), making the "append to `~/.zshrc`" class impossible. Run outcome and delivery outcome are separate (a failed Telegram send never fails the run), and deleting a schedule clears its run/destination side tables (the orphan-row lesson from Skills Studio). Routes: `GET /api/schedules/:id/runs`, `GET/POST /api/schedules/:id/destination`.
 
 ---
 

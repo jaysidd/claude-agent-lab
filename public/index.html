@@ -677,6 +677,27 @@
               <button data-cron="0 17 * * 1-5" type="button">Weekdays 5pm</button>
               <button data-cron="0 9 * * 1" type="button">Mon 9am</button>
             </div>
+            <div class="task-create-row" style="gap: 8px; align-items: center;">
+              <label class="field-label" for="schedule-dest-type" style="margin:0;">Send result to:</label>
+              <select id="schedule-dest-type">
+                <option value="in-app">In-app (run history only)</option>
+                <option value="file">Append to a file</option>
+                <option value="telegram">Telegram</option>
+              </select>
+              <input
+                id="schedule-dest-file"
+                type="text"
+                placeholder="digest.md  (under ~/.claude-agent-lab/reports)"
+                style="flex: 1; min-width: 0; display: none;"
+              />
+              <input
+                id="schedule-dest-chat"
+                type="text"
+                inputmode="numeric"
+                placeholder="Telegram chat id"
+                style="flex: 1; min-width: 0; display: none;"
+              />
+            </div>
             <div id="schedule-preview" class="schedule-preview"></div>
           </div>
           <div id="schedules-list"></div>

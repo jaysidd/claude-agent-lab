@@ -4210,6 +4210,32 @@ const scheduleCronInput = document.getElementById("schedule-cron");
 const scheduleCreateBtn = document.getElementById("schedule-create-btn");
 const schedulePreview = document.getElementById("schedule-preview");
 const schedulesList = document.getElementById("schedules-list");
+const scheduleDestType = document.getElementById("schedule-dest-type");
+const scheduleDestFile = document.getElementById("schedule-dest-file");
+const scheduleDestChat = document.getElementById("schedule-dest-chat");
+
+// Show the relevant destination config input for the chosen type.
+function syncScheduleDestInputs() {
+  scheduleDestFile.style.display = scheduleDestType.value === "file" ? "" : "none";
+  scheduleDestChat.style.display = scheduleDestType.value === "telegram" ? "" : "none";
+}
+scheduleDestType.addEventListener("change", syncScheduleDestInputs);
+
+// Build the destination payload from the form, or null for plain in-app.
+function collectScheduleDestination() {
+  const type = scheduleDestType.value;
+  if (type === "file") {
+    const fileName = scheduleDestFile.value.trim();
+    if (!fileName) throw new Error("Enter a file name for the file destination.");
+    return { type: "file", fileName };
+  }
+  if (type === "telegram") {
+    const chatId = parseInt(scheduleDestChat.value.trim(), 10);
+    if (!Number.isFinite(chatId)) throw new Error("Enter a numeric Telegram chat id.");
+    return { type: "telegram", chatId };
+  }
+  return { type: "in-app" };
+}
 
 state.schedules = [];
 
@@ -4323,18 +4349,29 @@ async function createSchedule() {
     alert("Pick an agent, write a prompt, and enter a cron expression.");
     return;
   }
+  let destination;
+  try {
+    destination = collectScheduleDestination();
+  } catch (err) {
+    alert(err.message);
+    return;
+  }
   scheduleCreateBtn.disabled = true;
   scheduleCreateBtn.textContent = "Saving…";
   try {
     const res = await fetch("/api/schedules", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ agentId, prompt, cron }),
+      body: JSON.stringify({ agentId, prompt, cron, destination }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
     schedulePromptInput.value = "";
     scheduleCronInput.value = "";
+    scheduleDestFile.value = "";
+    scheduleDestChat.value = "";
+    scheduleDestType.value = "in-app";
+    syncScheduleDestInputs();
     schedulePreview.innerHTML = "";
     await refreshSchedules();
   } catch (err) {
@@ -4435,6 +4472,15 @@ function renderScheduleCard(sched) {
     meta.appendChild(failEl);
   }
 
+  // Destination chip — where this schedule's output is sent.
+  const dest = sched.destination || { type: "in-app" };
+  const destEl = document.createElement("span");
+  destEl.className = "schedule-card-dest";
+  if (dest.type === "file") destEl.textContent = `→ file: ${dest.fileName}`;
+  else if (dest.type === "telegram") destEl.textContent = `→ telegram: ${dest.chatId}`;
+  else destEl.textContent = "→ in-app";
+  meta.appendChild(destEl);
+
   card.appendChild(meta);
 
   const actions = document.createElement("div");
@@ -4447,6 +4493,14 @@ function renderScheduleCard(sched) {
   runNowBtn.addEventListener("click", () => runScheduleNow(sched.id));
   actions.appendChild(runNowBtn);
 
+  const runsBtn = document.createElement("button");
+  runsBtn.textContent = "History";
+  runsBtn.title = "Show this schedule's past runs + their output";
+  const runsPanel = document.createElement("div");
+  runsPanel.className = "schedule-runs hidden";
+  runsBtn.addEventListener("click", () => toggleScheduleRuns(sched.id, runsPanel, runsBtn));
+  actions.appendChild(runsBtn);
+
   const toggleBtn = document.createElement("button");
   toggleBtn.textContent = sched.enabled ? "Pause" : "Resume";
   toggleBtn.addEventListener("click", () => toggleSchedule(sched.id, sched.enabled));
@@ -4458,7 +4512,49 @@ function renderScheduleCard(sched) {
   actions.appendChild(delBtn);
 
   card.appendChild(actions);
+  card.appendChild(runsPanel);
   return card;
+}
+
+async function toggleScheduleRuns(id, panel, btn) {
+  if (!panel.classList.contains("hidden")) {
+    panel.classList.add("hidden");
+    btn.textContent = "History";
+    return;
+  }
+  btn.textContent = "Hide history";
+  panel.classList.remove("hidden");
+  panel.innerHTML = '<div class="col-empty">Loading…</div>';
+  try {
+    const res = await fetch(`/api/schedules/${id}/runs`);
+    const data = await res.json();
+    renderScheduleRuns(panel, data.runs || []);
+  } catch {
+    panel.innerHTML = '<div class="col-empty">Could not load run history.</div>';
+  }
+}
+
+function renderScheduleRuns(panel, runs) {
+  panel.innerHTML = "";
+  if (runs.length === 0) {
+    panel.innerHTML = '<div class="col-empty">No runs yet. Use “Run now” to fire one.</div>';
+    return;
+  }
+  for (const r of runs) {
+    const row = document.createElement("div");
+    row.className = `schedule-run status-${r.status}`;
+    const head = document.createElement("div");
+    head.className = "schedule-run-head";
+    const when = new Date(r.finishedAt).toLocaleString();
+    const delivery = r.delivery && r.delivery !== "in-app" ? ` · delivery: ${r.delivery}` : "";
+    head.textContent = `${r.status} · ${when}${delivery}`;
+    row.appendChild(head);
+    const out = document.createElement("pre");
+    out.className = "schedule-run-output";
+    out.textContent = r.status === "error" ? r.error || "(error)" : r.output || "(no output)";
+    row.appendChild(out);
+    panel.appendChild(row);
+  }
 }
 
 async function runScheduleNow(id) {

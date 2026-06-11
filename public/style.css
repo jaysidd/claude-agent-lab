@@ -1358,6 +1358,50 @@ body {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
+/* Schedule destination chip + run history */
+.schedule-card-dest {
+  color: var(--muted);
+  font-size: 11px;
+}
+.schedule-runs {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.schedule-run {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 6px 9px;
+}
+.schedule-run.status-success {
+  border-left-color: #6ee7b7;
+}
+.schedule-run.status-error {
+  border-left-color: #f87171;
+}
+.schedule-run.status-budget_exhausted {
+  border-left-color: #fbbf24;
+}
+.schedule-run-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.schedule-run-output {
+  margin: 0;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 140px;
+  overflow-y: auto;
+  color: var(--text);
+}
 #memory-list {
   list-style: none;
   padding: 0;

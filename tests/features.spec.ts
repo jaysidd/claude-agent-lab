@@ -1789,4 +1789,186 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     await expect(lastMsg.locator(".distill-nudge")).toHaveCount(1);
     await expect(lastMsg).toContainText("did turn B");
   });
+
+  // ===== Scheduled-run history + destinations (Feature #5, B06) =====
+
+  test("Cron dest — resolveReportPath confines to the reports folder", async () => {
+    const { resolveReportPath, REPORTS_ROOT } = await import("../src/scheduleRuns.ts");
+    // Valid relative names (incl. a subdir) resolve INSIDE the reports root.
+    expect(resolveReportPath("digest.md").startsWith(REPORTS_ROOT + "/")).toBe(true);
+    expect(resolveReportPath("news/daily.md").startsWith(REPORTS_ROOT + "/")).toBe(true);
+    // Traversal / absolute / empty are rejected outright.
+    for (const bad of ["../escape.md", "/etc/passwd", "..", "sub/../../x", ""]) {
+      expect(() => resolveReportPath(bad), `should reject ${JSON.stringify(bad)}`).toThrow();
+    }
+    // A literal "~" is NOT shell-expanded — "~/.zshrc" lands harmlessly at
+    // <reports>/~/.zshrc, never the real home dotfile. Confinement, not escape.
+    expect(resolveReportPath("~/.zshrc").startsWith(REPORTS_ROOT + "/")).toBe(true);
+  });
+
+  test("Cron dest — set/get destination validates file + telegram shapes", async () => {
+    const { setDestination, getDestination, clearScheduleData } = await import(
+      "../src/scheduleRuns.ts"
+    );
+    const id = "qa-dest-sched";
+    try {
+      expect(getDestination(id).type).toBe("in-app"); // default
+      expect(setDestination(id, { type: "file", fileName: "x.md" }).fileName).toBe("x.md");
+      // bad file name rejected
+      expect(() => setDestination(id, { type: "file", fileName: "../x" } as any)).toThrow();
+      // telegram requires a numeric chatId
+      expect(() => setDestination(id, { type: "telegram" } as any)).toThrow();
+      expect(setDestination(id, { type: "telegram", chatId: 123 }).chatId).toBe(123);
+    } finally {
+      clearScheduleData(id);
+    }
+  });
+
+  test("Cron dest — recordRun history, deliver to file, clear", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const {
+      recordRun,
+      listRuns,
+      deliverResult,
+      setDestination,
+      clearScheduleData,
+      REPORTS_ROOT,
+    } = await import("../src/scheduleRuns.ts");
+    const id = "qa-runs-sched";
+    const reportFile = "qa-runs-test.md";
+    try {
+      recordRun({
+        scheduleId: id,
+        taskId: "t1",
+        status: "success",
+        output: "first run output",
+        startedAt: 1,
+        finishedAt: 2,
+      });
+      recordRun({
+        scheduleId: id,
+        taskId: "t2",
+        status: "error",
+        error: "boom",
+        startedAt: 3,
+        finishedAt: 4,
+      });
+      // A budget-blocked fire is also a recordable run status (the card shows
+      // "last: budget exhausted", so History must agree — advisor catch).
+      recordRun({
+        scheduleId: id,
+        taskId: "t3",
+        status: "budget_exhausted",
+        error: "cap reached",
+        delivery: "skipped (budget)",
+        startedAt: 5,
+        finishedAt: 6,
+      });
+      const runs = listRuns(id);
+      expect(runs.length).toBe(3);
+      expect(runs[0].status).toBe("budget_exhausted"); // most recent first
+      expect(runs[2].output).toBe("first run output");
+
+      // File delivery writes UNDER the reports root + returns "ok".
+      setDestination(id, { type: "file", fileName: reportFile });
+      const delivery = await deliverResult(id, {
+        status: "success",
+        output: "DELIVER ME",
+        error: null,
+        finishedAt: 5,
+      });
+      expect(delivery).toBe("ok");
+      const abs = path.resolve(REPORTS_ROOT, reportFile);
+      expect(fs.readFileSync(abs, "utf8")).toContain("DELIVER ME");
+
+      // A non-success run is not delivered externally.
+      const skipped = await deliverResult(id, {
+        status: "error",
+        output: null,
+        error: "x",
+        finishedAt: 6,
+      });
+      expect(skipped).toContain("skipped");
+    } finally {
+      clearScheduleData(id);
+      expect(listRuns(id).length).toBe(0); // clear removed history
+      try {
+        fs.rmSync(path.resolve(REPORTS_ROOT, reportFile));
+      } catch {}
+    }
+  });
+
+  test("Cron dest — run history is capped (retention trims oldest)", async () => {
+    const { recordRun, listRuns, clearScheduleData } = await import("../src/scheduleRuns.ts");
+    const id = "qa-retention-sched";
+    try {
+      for (let i = 0; i < 55; i++) {
+        recordRun({
+          scheduleId: id,
+          taskId: `t${i}`,
+          status: "success",
+          output: `run ${i}`,
+          startedAt: i,
+          finishedAt: i,
+        });
+      }
+      // Kept at the retention cap (50), newest retained.
+      const runs = listRuns(id, 100);
+      expect(runs.length).toBe(50);
+      expect(runs[0].output).toBe("run 54"); // most recent kept
+      expect(runs.some((r) => r.output === "run 0")).toBe(false); // oldest trimmed
+    } finally {
+      clearScheduleData(id);
+    }
+  });
+
+  test("Cron dest — routes: bad file dest rolls back create, runs 404 on missing", async ({
+    request,
+  }) => {
+    const base = "http://localhost:3333";
+    // A bad file destination rejects the whole create (no orphan schedule).
+    const before = (await (await request.get(`${base}/api/schedules`)).json()).length;
+    const bad = await request.post(`${base}/api/schedules`, {
+      data: {
+        agentId: "main",
+        prompt: "x",
+        cron: "0 9 * * *",
+        destination: { type: "file", fileName: "../escape.md" },
+      },
+    });
+    expect(bad.status()).toBe(400);
+    const after = (await (await request.get(`${base}/api/schedules`)).json()).length;
+    expect(after).toBe(before); // rolled back
+
+    // Runs on a missing schedule → 404.
+    expect((await request.get(`${base}/api/schedules/nope/runs`)).status()).toBe(404);
+  });
+
+  test("Cron dest — delete schedule clears its run history", async ({ request }) => {
+    const base = "http://localhost:3333";
+    const created = await request.post(`${base}/api/schedules`, {
+      data: { agentId: "main", prompt: "x", cron: "0 9 * * *", destination: { type: "in-app" } },
+    });
+    const id = (await created.json()).id;
+    // Runs endpoint works while it exists.
+    expect((await request.get(`${base}/api/schedules/${id}/runs`)).status()).toBe(200);
+    await request.delete(`${base}/api/schedules/${id}`);
+    // After delete, the schedule (and its runs endpoint) is gone.
+    expect((await request.get(`${base}/api/schedules/${id}/runs`)).status()).toBe(404);
+  });
+
+  test("Cron dest — schedule form destination picker toggles inputs", async ({ page }) => {
+    await page.goto("http://localhost:3333/");
+    await page.click("#schedules-btn");
+    await expect(page.locator("#schedules-modal")).toBeVisible();
+    // File input appears only for the 'file' destination type.
+    await expect(page.locator("#schedule-dest-file")).toBeHidden();
+    await page.selectOption("#schedule-dest-type", "file");
+    await expect(page.locator("#schedule-dest-file")).toBeVisible();
+    await page.selectOption("#schedule-dest-type", "telegram");
+    await expect(page.locator("#schedule-dest-chat")).toBeVisible();
+    await expect(page.locator("#schedule-dest-file")).toBeHidden();
+    await page.keyboard.press("Escape");
+  });
 });
