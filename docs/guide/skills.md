@@ -19,7 +19,28 @@ Each entry shows the skill's name and description, parsed from its `SKILL.md` fr
 
 There is a **Rescan** button. Discovery is a filesystem scan, so after you add or edit a skill on disk, hit Rescan to pick it up. Project skills shadow user skills of the same name, matching how the SDK resolves them.
 
-**To add a skill**, drop a `SKILL.md` (with a `name:` and `description:` in its frontmatter) into a new folder under `.claude/skills/` in your project, or under `~/.claude/skills/` to make it available everywhere. Then open the Skills modal and click Rescan. It appears in the list, ready to enable.
+Skills you installed through the panel (they live in `~/.claude/skills`) show a 🗑 button so you can remove them without leaving the app. Project skills you manage on disk yourself are never deleted through the UI.
+
+## Adding a skill (Skills Studio)
+
+The **＋ Add a skill** tab gives you three ways to create a skill, all of which install a standard `SKILL.md` into `~/.claude/skills` — there is no external registry and nothing is ever uploaded off your machine.
+
+- **🛠 Skill Builder** — fill in a name, a description (this is what tells the agent *when* to use the skill), an optional list of allowed tools, and the instructions. Command Center writes a correctly-formatted `SKILL.md` for you.
+- **📦 Starter pack** — a handful of ready-made, SDK-native skills bundled with the app (a commit-message helper, a changelog writer, a code explainer). One click installs them.
+- **📋 Paste SKILL.md** — paste a full skill you found elsewhere. Because this is content from outside, it goes through the safety scan and a review gate before it installs.
+
+### The safety scan
+
+Before a pasted skill installs, its text is run through a **static security scan** — a heuristic lint that flags risky patterns like piping a download straight into a shell, `rm -rf`, reverse shells, reading credential files, or editing your shell startup files. Findings are shown with a severity (low / medium / high) and the exact line.
+
+This is a *review aid, not a sandbox* — a skill is only text until an agent acts on it, and the scan catches obvious red flags, not everything. For that reason:
+
+- For the **Skill Builder** (content you wrote), the scan is purely informational.
+- For a **pasted** skill with a **high-severity** finding, the install button stays blocked until you tick "I've reviewed this skill and trust the source." The server enforces this too, so the gate can't be skipped.
+
+There is deliberately **no VirusTotal or cloud scan**: antivirus engines match malware binaries, not harmful instructions (so they'd add no signal on a text file), and uploading your skill to a third party would break the privacy promise that nothing leaves your machine without consent.
+
+> **Why not just install from ClawHub (or a big public catalog)?** Command Center is built on the Claude Agent SDK, whose tool vocabulary is `Read` / `Write` / `Bash` / `WebFetch` / MCP tools. Catalogs written for other engines reference tools that don't exist here (`fs_write_file`, `cmd_bash`, `browser_open`), so their skills would load but tell the agent to call tools it doesn't have. The honest path is to author SDK-native skills — which is exactly what Skills Studio does.
 
 ## How it works
 
@@ -29,6 +50,8 @@ The SDK loads skills only when `settingSources` includes `'project'` or `'user'`
 - An agent with **one or more** enabled skills runs its `query()` with `settingSources: ['project', 'user']` plus a `skills` name filter listing exactly the skills you toggled on.
 
 Which skills are enabled for which agent is stored in SQLite (`data/lab.db`) on your machine. Discovery itself is a plain filesystem scan, so listing your skills never spends a model turn.
+
+Installing, scanning, and deleting skills lives in [`src/skillInstall.ts`](../../src/skillInstall.ts). Every write and delete resolves the target path and verifies it stays inside `~/.claude/skills` (the same resolve-and-prefix-check used to stop SSRF in the browser feature), and skill folder names are confined to `[a-z0-9-]`, so a crafted name can't escape the skills folder. When you delete a skill, any stale per-agent "enabled" rows that referenced it are cleared too.
 
 **One side effect worth knowing.** Setting `settingSources: ['project', 'user']` does more than load skills. It tells the SDK to also load your project and user `CLAUDE.md`, any `.mcp.json`, and your project/user hooks for that run. That is wider than "just turn on a skill," and the `.mcp.json` load can overlap with the per-agent MCP config from the MCP modal. It is strictly opt-in (it only fires for an agent once you enable a skill on it), which fits the personal, local-only use model.
 

@@ -130,6 +130,15 @@ export function setSkillEnabled(agentId: string, skillName: string, enabled: boo
   }
 }
 
+// Remove a skill's enabled rows across ALL agents — called when the skill is
+// deleted from disk so a stale row can't keep flipping settingSources on for a
+// skill that no longer exists (the R1 blast-radius note above). Returns the
+// number of rows cleared.
+export function clearSkillEverywhere(skillName: string): number {
+  const r = db.prepare("DELETE FROM agent_skills WHERE skill_name = ?").run(skillName);
+  return r.changes;
+}
+
 // ============================================================================
 // Runtime composition — spread into query() options
 // ============================================================================

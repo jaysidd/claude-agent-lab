@@ -1188,6 +1188,107 @@ body {
 .modal-actions .field-help {
   margin-right: auto;
 }
+/* Skills Studio — tabs + scan UI */
+.skills-tabs,
+.skills-source-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.skills-source-tabs {
+  border-bottom: none;
+  margin-bottom: 10px;
+}
+.skills-tab,
+.skills-source-tab {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.skills-source-tab {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.skills-tab:hover,
+.skills-source-tab:hover {
+  color: var(--text);
+}
+.skills-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.skills-source-tab.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.skills-scan-summary {
+  font-size: 12px;
+  font-weight: 600;
+  margin: 12px 0 6px 0;
+}
+.skills-scan-summary.clean {
+  color: #6ee7b7;
+}
+.skills-scan-summary.low {
+  color: #93c5fd;
+}
+.skills-scan-summary.medium {
+  color: #fbbf24;
+}
+.skills-scan-summary.high {
+  color: #f87171;
+}
+#skills-scan-findings {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.scan-finding {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.scan-finding.high {
+  border-left-color: #f87171;
+}
+.scan-finding.medium {
+  border-left-color: #fbbf24;
+}
+.scan-finding.low {
+  border-left-color: #93c5fd;
+}
+.scan-finding .scan-rule {
+  font-weight: 600;
+}
+.scan-finding .scan-snippet {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-family: var(--mono, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.skill-delete {
+  margin-left: auto;
+}
 #memory-list {
   list-style: none;
   padding: 0;

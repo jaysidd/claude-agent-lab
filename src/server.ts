@@ -70,7 +70,17 @@ import {
   enabledSkillsFor,
   setSkillEnabled,
   skillsOptionsFor,
+  clearSkillEverywhere,
 } from "./skills.js";
+import {
+  scanSkillContent,
+  installSkill,
+  deleteSkill,
+  listStarterSkills,
+  installStarterSkill,
+  parseSkillMd,
+  isUserInstalledSkillPath,
+} from "./skillInstall.js";
 import {
   maskedSettings,
   setSetting,
@@ -862,7 +872,14 @@ app.get("/api/skills", (req, res) => {
   const enabled = new Set(enabledSkillsFor(agentId));
   res.json({
     cwd: currentCwd,
-    skills: discovered.map((s) => ({ ...s, enabled: enabled.has(s.name) })),
+    // `deletable` = installed in the user skills root (~/.claude/skills), the
+    // only place Skills Studio writes. Project-source skills are managed by the
+    // operator on disk and are never removed through the UI.
+    skills: discovered.map((s) => ({
+      ...s,
+      enabled: enabled.has(s.name),
+      deletable: isUserInstalledSkillPath(s.path),
+    })),
   });
 });
 
@@ -874,6 +891,95 @@ app.post("/api/skills/toggle", (req, res) => {
   }
   setSkillEnabled(agentId, skillName.trim(), !!enabled);
   res.json({ ok: true, enabled: !!enabled });
+});
+
+// ----- Skills Studio: scan, install (Builder / paste / starter), delete -----
+
+// Static security scan of skill content. Advisory heuristic, not a sandbox —
+// surfaced so the operator can review before installing pasted/external text.
+app.post("/api/skills/scan", (req, res) => {
+  const content = (req.body?.content ?? "").toString();
+  res.json(scanSkillContent(content));
+});
+
+// List the bundled starter pack (SDK-native skills shipped in the repo).
+app.get("/api/skills/starter", (_req, res) => {
+  res.json({ starters: listStarterSkills() });
+});
+
+// Install a skill. `source` is informational; the trust gate lives in the UI.
+// For an external paste we hold the server honest too: block on a HIGH-severity
+// finding unless the client explicitly acknowledges it.
+app.post("/api/skills/install", (req, res) => {
+  const body = req.body ?? {};
+  const source = body.source === "paste" ? "paste" : body.source === "starter" ? "starter" : "builder";
+
+  try {
+    if (source === "starter") {
+      const id = (body.starterId ?? "").toString();
+      const skill = installStarterSkill(id, { force: !!body.force });
+      return res.json({ ok: true, skill, source });
+    }
+
+    // External paste: the client may send a whole raw SKILL.md (`raw`), which we
+    // parse server-side, or explicit fields. Either way we re-scan server-side
+    // and refuse HIGH findings without an explicit acknowledgement, so the gate
+    // can't be skipped by calling the API directly. Builder content is
+    // first-party — scanned in the UI for info, not gated here.
+    let input;
+    if (source === "paste" && typeof body.raw === "string" && body.raw.trim()) {
+      const parsed = parseSkillMd(body.raw);
+      input = {
+        name: parsed.name,
+        description: parsed.description,
+        allowedTools: parsed.allowedTools,
+        body: parsed.body,
+      };
+    } else {
+      input = {
+        name: (body.name ?? "").toString(),
+        description: (body.description ?? "").toString(),
+        allowedTools: Array.isArray(body.allowedTools)
+          ? body.allowedTools.map((t: unknown) => String(t))
+          : [],
+        body: (body.body ?? "").toString(),
+      };
+    }
+
+    if (source === "paste") {
+      const scan = scanSkillContent(
+        typeof body.raw === "string" && body.raw.trim()
+          ? body.raw
+          : `${input.name}\n${input.description}\n${(input.allowedTools || []).join(" ")}\n${input.body}`,
+      );
+      if (scan.maxSeverity === "high" && !body.acknowledged) {
+        return res.status(409).json({
+          error: "high-severity findings require acknowledgement",
+          scan,
+        });
+      }
+    }
+
+    const skill = installSkill(input, { force: !!body.force });
+    res.json({ ok: true, skill, source });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? "install failed" });
+  }
+});
+
+// Remove an installed (user-root) skill, and clear any per-agent enabled rows
+// that referenced it so a stale toggle can't keep flipping settingSources on.
+app.delete("/api/skills/:slug", (req, res) => {
+  try {
+    const slug = req.params.slug;
+    const { removed, name } = deleteSkill(slug);
+    if (!removed) return res.status(404).json({ error: "skill not found" });
+    // Clear stale per-agent enabled rows for the deleted skill.
+    if (name) clearSkillEverywhere(name);
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ error: err?.message ?? "delete failed" });
+  }
 });
 
 // ----- Browser automation (per-agent Playwright preset + domain gate) -----
