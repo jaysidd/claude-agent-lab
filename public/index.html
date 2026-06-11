@@ -50,9 +50,6 @@
         <div class="chat-header-main">
           <div id="chat-title">Select an agent</div>
           <div id="chat-sub">Pick someone from the left to start chatting</div>
-          <button id="cwd-pill" type="button" title="Change project folder">
-            📁 <span id="cwd-label">loading…</span>
-          </button>
         </div>
         <div class="header-controls">
           <span id="session-usage" class="session-usage hidden" title="Session totals — click for details"></span>
@@ -98,6 +95,9 @@
         </div>
       </div>
       <form id="composer">
+        <button id="cwd-pill" type="button" title="Project folder — what this agent can see. Click to change.">
+          📁 <span id="cwd-label">loading…</span>
+        </button>
         <div class="composer-wrap">
           <textarea
             id="input"
