@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-68_passing-6ee7b7)](./tests)
+[![Tests](https://img.shields.io/badge/tests-72_passing-6ee7b7)](./tests)
 
 A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. **Durable SQLite-backed task queue** with atomic checkout and lease-based crash recovery. **Cron-style scheduler** that wakes agents on a schedule. **Per-task approval gates** that pause dangerous tools for sign-off. **Per-agent budget caps** (cost + rate) enforced before every SDK call. **Context pins**, **MCP servers**, and **Skills** configurable per agent. A **Telegram bridge** so you can drive the same agents from your phone. Token-by-token streaming, folder scoping, `@file` / `/command` autocomplete, persistent SQLite memory, conversation history with restore-and-resume, OAuth-aware cost tracking, Markdown / JSON export, a ⌘K command palette, and voice I/O via [WhisprDesk](https://whisprdesk.com/).
 
@@ -46,6 +46,7 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Budget caps (CostGuard)](#budget-caps-costguard) | Preflight `check()` before every `query()`; cost cap + rate cap; OAuth-aware |
 | [Context pins](#context-pins) | Per-agent file/snippet auto-injected into the system prompt; files re-read live |
 | [MCP servers](#mcp-servers) | Per-agent stdio/http/sse MCP servers → `options.mcpServers`; tools light up |
+| [Browser automation](#browser-automation) | Per-agent Playwright browser behind an allow-list + private-IP `PreToolUse` gate |
 | [Skills](#skills) | Per-agent toggle of `.claude/skills/*` via `settingSources` + `skills` filter |
 | [Telegram bridge](#telegram-bridge) | Long-poll listener routes DMs to the same agents; allowlist-gated |
 | [Markdown rendering](#markdown-rendering) | Not SDK — `marked` + `DOMPurify` + `highlight.js` on completed replies |
@@ -377,6 +378,14 @@ Pin per-agent context that's injected into the system prompt **every turn** — 
 ### MCP servers
 
 Connect [Model Context Protocol](https://modelcontextprotocol.io) servers to an agent and their tools light up automatically. Per-agent **stdio** (spawns a process), **http**, or **sse** (connect to a URL) configs are stored in SQLite ([`src/mcpServers.ts`](src/mcpServers.ts)) and spread into `query()`'s `mcpServers` option, with `mcp__<name>` allow-tokens appended so the tools aren't blocked by the agent's allowlist. env/header secrets are masked in the UI but used raw at runtime. A **Test** button spins one server up in isolation and reports connected/failed from the SDK's `system.init` `mcp_servers` status — without burning a model turn. Routes: `GET/POST /api/mcp`, `POST /api/mcp/:id/{enabled,test}`, `DELETE /api/mcp/:id`.
+
+---
+
+### Browser automation
+
+Give an agent a real browser (the official [Playwright MCP server](https://github.com/microsoft/playwright-mcp)) behind a permission gate. The 🌐 **Browser** panel toggles it per agent and manages an allow-list of domains; the agent can navigate only to those (subdomains included). Built on the MCP plumbing above ([`src/browser.ts`](src/browser.ts)): when enabled, the Playwright server is added to the agent's `mcpServers` (run `--isolated`, so no access to your real browser cookies), and a `PreToolUse` hook on `browser_navigate` enforces the gate.
+
+This is the highest-risk surface in any agent app — a visited page is untrusted input, and a browser is an SSRF path into your LAN — so the gate is held to a higher bar. A hard **deny-list floor** (localhost, RFC1918 private ranges, link-local + cloud-metadata addresses, non-web protocols) is always enforced and understands obfuscated forms (decimal/hex/IPv4-mapped-IPv6 spellings of a private address are still blocked). There is intentionally **no "open" mode** — an agent may only reach domains you trust. The one honest residual (an allow-listed page that redirects to a private host is not individually re-gated, a documented Playwright limitation) is covered in the [security audit](docs/audits/security-audit-browser.md) and the [user guide](docs/guide/browser-automation.md). Routes: `GET/POST /api/browser/:agentId`, `POST/DELETE /api/browser/:agentId/domain`.
 
 ---
 

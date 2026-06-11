@@ -488,6 +488,111 @@ test.describe("Command Center — new features smoke (no engine)", () => {
     }
   });
 
+  // ----- Browser automation -----
+
+  test("Browser — config CRUD: enable, headless, mode coerced to allowlist", async ({
+    request,
+  }) => {
+    const base = "http://localhost:3333";
+    try {
+      // default (disabled)
+      const def = await (await request.get(`${base}/api/browser/ops`)).json();
+      expect(def.enabled).toBe(false);
+      // enable + attempt to set open mode -> must coerce to allowlist (audit S1)
+      const en = await (
+        await request.post(`${base}/api/browser/ops`, {
+          data: { enabled: true, mode: "open", headless: false },
+        })
+      ).json();
+      expect(en.enabled).toBe(true);
+      expect(en.mode).toBe("allowlist"); // "open" is rejected
+      expect(en.headless).toBe(false);
+    } finally {
+      await request.post(`${base}/api/browser/ops`, {
+        data: { enabled: false, allowedDomains: [] },
+      });
+      const db = new Database(LAB_DB);
+      db.prepare("DELETE FROM browser_agents").run();
+      db.close();
+    }
+  });
+
+  test("Browser — domain add normalizes + remove works", async ({ request }) => {
+    const base = "http://localhost:3333";
+    try {
+      const added = await (
+        await request.post(`${base}/api/browser/comms/domain`, {
+          data: { domain: "HTTPS://GitHub.com/some/path" },
+        })
+      ).json();
+      expect(added.allowedDomains).toContain("github.com"); // scheme/path/case stripped
+      const removed = await (
+        await request.fetch(`${base}/api/browser/comms/domain`, {
+          method: "DELETE",
+          data: { domain: "github.com" },
+        })
+      ).json();
+      expect(removed.allowedDomains).not.toContain("github.com");
+    } finally {
+      const db = new Database(LAB_DB);
+      db.prepare("DELETE FROM browser_agents").run();
+      db.close();
+    }
+  });
+
+  test("Browser — routes reject unknown agent", async ({ request }) => {
+    const base = "http://localhost:3333";
+    const r1 = await request.get(`${base}/api/browser/nope`);
+    expect(r1.status()).toBe(400);
+    const r2 = await request.post(`${base}/api/browser/nope`, { data: { enabled: true } });
+    expect(r2.status()).toBe(400);
+  });
+
+  test("Browser — URL gate denies SSRF/obfuscation, allows allow-listed", async () => {
+    // The gate is the security boundary; regression-test it directly. Imports
+    // the real isUrlAllowed + seeds config via setBrowserConfig (writes to the
+    // shared SQLite db, WAL-safe alongside the running server).
+    const { setBrowserConfig, isUrlAllowed } = await import("../src/browser.ts");
+    const A = "gate-test-agent";
+    setBrowserConfig(A, { enabled: true, allowedDomains: ["github.com"] });
+    try {
+      const mustDeny = [
+        "http://localhost:3333/",
+        "http://127.0.0.1/",
+        "http://2130706433/", // decimal-obfuscated 127.0.0.1
+        "http://0x7f000001/", // hex
+        "http://0177.0.0.1/", // octal
+        "http://127.1/", // short form
+        "http://169.254.169.254/", // cloud metadata
+        "http://192.168.1.1/",
+        "http://10.0.0.5/",
+        "http://[::ffff:127.0.0.1]/", // IPv4-mapped IPv6 (audit S2)
+        "http://[::ffff:a9fe:a9fe]/", // metadata via mapped IPv6
+        "http://[::1]/",
+        "http://[::]/",
+        "http://localhost./", // trailing dot (audit S3)
+        "https://github.com.evil.com/", // suffix trick
+        "http://evil.com/", // not allow-listed
+        "file:///etc/passwd", // protocol floor
+        "http://localhost@evil.com/", // userinfo: real host evil.com, not listed
+      ];
+      const mustAllow = [
+        "https://github.com/anthropics",
+        "https://api.github.com/repos", // subdomain
+      ];
+      for (const u of mustDeny) {
+        expect(isUrlAllowed(A, u).allowed, `should DENY ${u}`).toBe(false);
+      }
+      for (const u of mustAllow) {
+        expect(isUrlAllowed(A, u).allowed, `should ALLOW ${u}`).toBe(true);
+      }
+    } finally {
+      const db = new Database(LAB_DB);
+      db.prepare("DELETE FROM browser_agents").run();
+      db.close();
+    }
+  });
+
   test("C16a — POST /api/schedules creates a schedule with all fields", async ({
     request,
   }) => {

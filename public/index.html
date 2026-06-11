@@ -92,6 +92,9 @@
           <button id="skills-btn" type="button" title="Skills — enable .claude/skills per agent">
             🧩 Skills <span id="skills-count" class="tasks-count">0</span>
           </button>
+          <button id="browser-btn" type="button" title="Browser automation — let this agent drive a real browser, gated per domain">
+            🌐 Browser <span id="browser-count" class="tasks-count">0</span>
+          </button>
         </div>
       </div>
       <form id="composer">
@@ -378,6 +381,46 @@
             <button id="skills-refresh-btn" class="btn-test" type="button">↻ Rescan</button>
           </div>
           <ul id="skills-list"></ul>
+        </div>
+      </div>
+    </div>
+
+    <div id="browser-modal" class="modal-overlay hidden">
+      <div class="modal modal-wide">
+        <header class="modal-header">
+          <div class="modal-title">🌐 Browser Automation</div>
+          <button id="browser-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="modal-intro">
+            Let an agent drive a real browser (powered by the
+            <a href="https://github.com/microsoft/playwright-mcp" target="_blank" rel="noopener">Playwright MCP server</a>)
+            to navigate, click, type, and read pages. Every navigation passes a
+            permission gate. A hard deny-list always blocks localhost, private
+            network addresses, and non-web protocols, even in Open mode, so a
+            wandering or prompt-injected agent can never reach your machine or LAN.
+          </p>
+          <div class="task-create-row" style="margin-bottom: 10px">
+            <select id="browser-agent" title="Which agent gets the browser"></select>
+            <label class="mcp-toggle">
+              <input id="browser-enabled" type="checkbox" /> enabled for this agent
+            </label>
+          </div>
+          <div id="browser-config" class="hidden">
+            <div class="task-create-row" style="margin-bottom: 10px; gap: 16px;">
+              <label class="mcp-toggle" title="Headless runs the browser invisibly. Uncheck to watch it work.">
+                <input id="browser-headless" type="checkbox" checked /> headless
+              </label>
+              <span class="field-help" style="margin:0;">This agent can visit only the domains you allow below. Subdomains are included.</span>
+            </div>
+            <div id="browser-domains-block">
+              <div class="task-create-row" style="margin-bottom: 6px;">
+                <input id="browser-domain-input" type="text" placeholder="github.com  (domain to allow — subdomains included)" style="flex: 1; min-width: 0;" />
+                <button id="browser-domain-add" class="btn-primary" type="button">Allow domain</button>
+              </div>
+              <ul id="browser-domains-list"></ul>
+            </div>
+          </div>
         </div>
       </div>
     </div>
