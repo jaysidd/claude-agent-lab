@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { db, memoryBlockFor } from "./memory.js";
+import { buildPersonalityPrompt } from "./personality.js";
 
 // ============================================================================
 // Schema
@@ -194,12 +195,16 @@ export function pinnedBlockFor(agentId: string): string | null {
 // Composition — the single system-prompt augmentation point
 // ============================================================================
 
-// Appends the persistent-memory block (memory.ts) and the pinned-context
-// block (this module) to an agent's base system prompt. All query() callers
-// in server.ts use this. Order: base → memory → pins, so the most-specific
-// operator intent (pins) sits last/closest to the user turn.
+// Appends the personality block (personality.ts), the persistent-memory block
+// (memory.ts), and the pinned-context block (this module) to an agent's base
+// system prompt. All query() callers in server.ts use this. Order:
+// base → personality → memory → pins. Personality (incl. its locked privacy +
+// boundary sections) sits right after the base prompt as foundational
+// behavior; memory and pins are context that sits closest to the user turn.
 export function augmentedSystemPrompt(agentId: string, basePrompt: string): string {
   const parts = [basePrompt];
+  const personality = buildPersonalityPrompt(agentId);
+  if (personality) parts.push(personality);
   const mem = memoryBlockFor(agentId);
   if (mem) parts.push(mem);
   const pins = pinnedBlockFor(agentId);

@@ -1167,6 +1167,27 @@ body {
   margin: 0 0 14px 0;
   line-height: 1.5;
 }
+.field-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.field-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.modal-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+}
+.modal-actions .field-help {
+  margin-right: auto;
+}
 #memory-list {
   list-style: none;
   padding: 0;

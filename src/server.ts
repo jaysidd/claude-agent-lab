@@ -131,6 +131,12 @@ import {
   BROWSER_NAV_TOOL,
   type BrowserMode,
 } from "./browser.js";
+import {
+  getPersonality,
+  setPersonality,
+  PRESETS,
+  type CustomProfile,
+} from "./personality.js";
 
 type TaskPriority = "low" | "medium" | "high";
 type ApiTaskStatus = "queued" | "active" | "done" | "error";
@@ -916,6 +922,45 @@ app.delete("/api/browser/:agentId/domain", (req, res) => {
   const current = getBrowserConfig(agentId);
   const next = current.allowedDomains.filter((d) => d !== domain);
   res.json(setBrowserConfig(agentId, { allowedDomains: next }));
+});
+
+// ----- Agent personality (Soul Builder) -----
+
+// Read the personality config for an agent, plus the available presets so the
+// UI can render the dropdown without a second round-trip.
+app.get("/api/personality/:agentId", (req, res) => {
+  const agentId = req.params.agentId;
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
+  res.json({
+    config: getPersonality(agentId),
+    presets: Object.entries(PRESETS).map(([key, p]) => ({ key, label: p.label })),
+  });
+});
+
+// Update an agent's personality. `preset` is 'none' | a preset key | 'custom';
+// `custom` is the Soul Builder profile (only meaningful when preset is 'custom',
+// but always persisted so toggling back and forth doesn't lose the draft).
+app.post("/api/personality/:agentId", (req, res) => {
+  const agentId = req.params.agentId;
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
+  const body = req.body ?? {};
+  const patch: { preset?: string; custom?: CustomProfile } = {};
+  if (typeof body.preset === "string") patch.preset = body.preset;
+  if (body.custom && typeof body.custom === "object") {
+    const c = body.custom;
+    const custom: CustomProfile = {};
+    if (typeof c.communicationStyle === "string") custom.communicationStyle = c.communicationStyle;
+    if (typeof c.userName === "string") custom.userName = c.userName;
+    if (typeof c.userRole === "string") custom.userRole = c.userRole;
+    if (typeof c.userNotes === "string") custom.userNotes = c.userNotes;
+    if (Array.isArray(c.additionalCoreTruths)) {
+      custom.additionalCoreTruths = c.additionalCoreTruths
+        .map((t: unknown) => String(t))
+        .filter((t: string) => t.trim().length > 0);
+    }
+    patch.custom = custom;
+  }
+  res.json(setPersonality(agentId, patch));
 });
 
 // ----- Plan mode -----

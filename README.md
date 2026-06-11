@@ -3,7 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
 [![TypeScript](https://img.shields.io/badge/TypeScript-ESM-3178c6)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-72_passing-6ee7b7)](./tests)
+[![Tests](https://img.shields.io/badge/tests-79_passing-6ee7b7)](./tests)
 
 A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. **Durable SQLite-backed task queue** with atomic checkout and lease-based crash recovery. **Cron-style scheduler** that wakes agents on a schedule. **Per-task approval gates** that pause dangerous tools for sign-off. **Per-agent budget caps** (cost + rate) enforced before every SDK call. **Context pins**, **MCP servers**, and **Skills** configurable per agent. A **Telegram bridge** so you can drive the same agents from your phone. Token-by-token streaming, folder scoping, `@file` / `/command` autocomplete, persistent SQLite memory, conversation history with restore-and-resume, OAuth-aware cost tracking, Markdown / JSON export, a ⌘K command palette, and voice I/O via [WhisprDesk](https://whisprdesk.com/).
 
@@ -47,6 +47,7 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Context pins](#context-pins) | Per-agent file/snippet auto-injected into the system prompt; files re-read live |
 | [MCP servers](#mcp-servers) | Per-agent stdio/http/sse MCP servers → `options.mcpServers`; tools light up |
 | [Browser automation](#browser-automation) | Per-agent Playwright browser behind an allow-list + private-IP `PreToolUse` gate |
+| [Agent personality](#agent-personality) | Per-agent voice (Soul Builder) layered over locked privacy/boundary guardrails |
 | [Skills](#skills) | Per-agent toggle of `.claude/skills/*` via `settingSources` + `skills` filter |
 | [Telegram bridge](#telegram-bridge) | Long-poll listener routes DMs to the same agents; allowlist-gated |
 | [Markdown rendering](#markdown-rendering) | Not SDK — `marked` + `DOMPurify` + `highlight.js` on completed replies |
@@ -386,6 +387,14 @@ Connect [Model Context Protocol](https://modelcontextprotocol.io) servers to an 
 Give an agent a real browser (the official [Playwright MCP server](https://github.com/microsoft/playwright-mcp)) behind a permission gate. The 🌐 **Browser** panel toggles it per agent and manages an allow-list of domains; the agent can navigate only to those (subdomains included). Built on the MCP plumbing above ([`src/browser.ts`](src/browser.ts)): when enabled, the Playwright server is added to the agent's `mcpServers` (run `--isolated`, so no access to your real browser cookies), and a `PreToolUse` hook on `browser_navigate` enforces the gate.
 
 This is the highest-risk surface in any agent app — a visited page is untrusted input, and a browser is an SSRF path into your LAN — so the gate is held to a higher bar. A hard **deny-list floor** (localhost, RFC1918 private ranges, link-local + cloud-metadata addresses, non-web protocols) is always enforced and understands obfuscated forms (decimal/hex/IPv4-mapped-IPv6 spellings of a private address are still blocked). There is intentionally **no "open" mode** — an agent may only reach domains you trust. The one honest residual (an allow-listed page that redirects to a private host is not individually re-gated, a documented Playwright limitation) is covered in the [security audit](docs/audits/security-audit-browser.md) and the [user guide](docs/guide/browser-automation.md). Routes: `GET/POST /api/browser/:agentId`, `POST/DELETE /api/browser/:agentId/domain`.
+
+---
+
+### Agent personality
+
+Give an agent a **voice** without touching its job. The 🎭 **Personality** panel sets a per-agent tone — five presets (Friendly / Professional / Concise / Encouraging / Direct) or a custom **Soul Builder** profile (communication style, who you are, standing notes, extra "core truths"). Ported from Clawless's Soul Builder, but identity-preserving: the layer adds voice and context on top of each agent's own role, it never renames the agent. Composed at the same chokepoint as memory + pins — `augmentedSystemPrompt()` in [`src/contextPins.ts`](src/contextPins.ts) — as `base → <agent-personality> → <persistent-memory> → <pinned-context>`.
+
+The safety pattern is the point: a personality is **editable tone over locked guardrails**. Three sections (privacy, boundaries, continuity) always concatenate and **cannot be removed or overridden** — you can make an agent friendlier, you can't talk it out of refusing prompt injection or leaking its system prompt. Custom "core truths" are *additive*, never replacing the locked ones, and all custom text is sanitized (control / zero-width / BiDi / homoglyph-bracket stripping) before it reaches the prompt; an unknown preset key collapses to `none` server-side. Logic in [`src/personality.ts`](src/personality.ts); covered by 7 tests incl. a locked-section bypass regression. See the [user guide](docs/guide/personality.md). Routes: `GET/POST /api/personality/:agentId`.
 
 ---
 

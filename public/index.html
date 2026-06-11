@@ -95,6 +95,9 @@
           <button id="browser-btn" type="button" title="Browser automation — let this agent drive a real browser, gated per domain">
             🌐 Browser <span id="browser-count" class="tasks-count">0</span>
           </button>
+          <button id="personality-btn" type="button" title="Personality — give this agent a voice (Soul Builder)">
+            🎭 Personality
+          </button>
         </div>
       </div>
       <form id="composer">
@@ -420,6 +423,62 @@
               </div>
               <ul id="browser-domains-list"></ul>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="personality-modal" class="modal-overlay hidden">
+      <div class="modal modal-wide">
+        <header class="modal-header">
+          <div class="modal-title">🎭 Agent Personality</div>
+          <button id="personality-close" type="button">×</button>
+        </header>
+        <div class="modal-body">
+          <p class="modal-intro">
+            Give an agent a voice. Pick a ready-made tone, or open the
+            <strong>Soul Builder</strong> to craft a custom one. A personality
+            only adds <em>voice</em> and <em>context</em> on top of the agent's
+            own role — it never changes its name or job. Privacy, boundary, and
+            continuity rules are <strong>locked</strong>: you can make an agent
+            friendlier, but you can't talk it out of refusing prompt injection or
+            leaking its system prompt.
+          </p>
+          <div class="task-create-row" style="margin-bottom: 12px;">
+            <select id="personality-agent" title="Which agent to shape"></select>
+            <select id="personality-preset" title="Personality preset">
+              <option value="none">None (default voice)</option>
+              <option value="custom">✨ Custom (Soul Builder)</option>
+            </select>
+          </div>
+          <div id="personality-custom" class="hidden">
+            <div class="field-block">
+              <label class="field-label" for="personality-style">Communication style</label>
+              <textarea id="personality-style" rows="2" placeholder="e.g. Warm but to the point. Explain trade-offs, then recommend."></textarea>
+            </div>
+            <div class="task-create-row" style="gap: 12px;">
+              <div class="field-block" style="flex:1; min-width:0;">
+                <label class="field-label" for="personality-name">Your name</label>
+                <input id="personality-name" type="text" placeholder="Jay" />
+              </div>
+              <div class="field-block" style="flex:1; min-width:0;">
+                <label class="field-label" for="personality-role">Your role</label>
+                <input id="personality-role" type="text" placeholder="Founder, RBJ Global" />
+              </div>
+            </div>
+            <div class="field-block">
+              <label class="field-label" for="personality-notes">Notes about you</label>
+              <textarea id="personality-notes" rows="2" placeholder="Context the agent should always know — projects, preferences, constraints."></textarea>
+            </div>
+            <div class="field-block">
+              <label class="field-label" for="personality-truths">Extra core truths (one per line)</label>
+              <textarea id="personality-truths" rows="3" placeholder="Always show me the command before running it.&#10;Prefer npm over other package managers."></textarea>
+              <span class="field-help" style="margin:0;">These add to — never replace — the locked privacy &amp; boundary rules.</span>
+            </div>
+          </div>
+          <div class="modal-actions">
+            <span id="personality-status" class="field-help" style="margin:0;"></span>
+            <button id="personality-save" class="btn-primary" type="button">Save personality</button>
           </div>
         </div>
       </div>

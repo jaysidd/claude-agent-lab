@@ -2057,6 +2057,133 @@ async function refreshBrowserCount() {
   }
 }
 
+// ----- Agent personality (Soul Builder) -----
+
+const personalityBtn = document.getElementById("personality-btn");
+const personalityModal = document.getElementById("personality-modal");
+const personalityClose = document.getElementById("personality-close");
+const personalityAgentSelect = document.getElementById("personality-agent");
+const personalityPreset = document.getElementById("personality-preset");
+const personalityCustomBlock = document.getElementById("personality-custom");
+const personalityStyle = document.getElementById("personality-style");
+const personalityName = document.getElementById("personality-name");
+const personalityRole = document.getElementById("personality-role");
+const personalityNotes = document.getElementById("personality-notes");
+const personalityTruths = document.getElementById("personality-truths");
+const personalitySave = document.getElementById("personality-save");
+const personalityStatus = document.getElementById("personality-status");
+
+state.personality = null;
+
+function closePersonalityModal() {
+  personalityModal.classList.add("hidden");
+}
+personalityBtn.addEventListener("click", openPersonalityModal);
+personalityClose.addEventListener("click", closePersonalityModal);
+personalityModal.addEventListener("click", (e) => {
+  if (e.target === personalityModal) closePersonalityModal();
+});
+personalityAgentSelect.addEventListener("change", refreshPersonality);
+personalityPreset.addEventListener("change", () => {
+  personalityCustomBlock.classList.toggle("hidden", personalityPreset.value !== "custom");
+  personalityStatus.textContent = "";
+});
+personalitySave.addEventListener("click", savePersonality);
+
+function populatePersonalityAgentSelect() {
+  const prev = personalityAgentSelect.value || state.activeAgentId;
+  personalityAgentSelect.innerHTML = "";
+  for (const a of state.agents) {
+    const opt = document.createElement("option");
+    opt.value = a.id;
+    opt.textContent = `${a.emoji} ${a.name}`;
+    personalityAgentSelect.appendChild(opt);
+  }
+  if (prev && state.agents.some((a) => a.id === prev)) personalityAgentSelect.value = prev;
+}
+
+async function openPersonalityModal() {
+  populatePersonalityAgentSelect();
+  await refreshPersonality();
+  personalityModal.classList.remove("hidden");
+}
+
+async function refreshPersonality() {
+  const agentId = personalityAgentSelect.value;
+  personalityStatus.textContent = "";
+  if (!agentId) return;
+  try {
+    const res = await fetch(`/api/personality/${encodeURIComponent(agentId)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.personality = await res.json();
+  } catch (err) {
+    console.warn("refreshPersonality failed:", err);
+    state.personality = null;
+  }
+  renderPersonality();
+}
+
+function renderPersonality() {
+  const data = state.personality;
+  if (!data) return;
+  // Build the preset dropdown from the server's preset list (keeping the
+  // None + Custom anchors), so adding a preset server-side needs no UI change.
+  const cur = data.config.preset;
+  personalityPreset.innerHTML = "";
+  const none = new Option("None (default voice)", "none");
+  personalityPreset.appendChild(none);
+  for (const p of data.presets || []) {
+    personalityPreset.appendChild(new Option(p.label, p.key));
+  }
+  personalityPreset.appendChild(new Option("✨ Custom (Soul Builder)", "custom"));
+  personalityPreset.value = cur;
+
+  const c = data.config.custom || {};
+  personalityStyle.value = c.communicationStyle || "";
+  personalityName.value = c.userName || "";
+  personalityRole.value = c.userRole || "";
+  personalityNotes.value = c.userNotes || "";
+  personalityTruths.value = (c.additionalCoreTruths || []).join("\n");
+
+  personalityCustomBlock.classList.toggle("hidden", cur !== "custom");
+}
+
+async function savePersonality() {
+  const agentId = personalityAgentSelect.value;
+  if (!agentId) return;
+  const preset = personalityPreset.value;
+  const body = { preset };
+  if (preset === "custom") {
+    body.custom = {
+      communicationStyle: personalityStyle.value,
+      userName: personalityName.value,
+      userRole: personalityRole.value,
+      userNotes: personalityNotes.value,
+      additionalCoreTruths: personalityTruths.value
+        .split("\n")
+        .map((t) => t.trim())
+        .filter(Boolean),
+    };
+  }
+  personalitySave.disabled = true;
+  personalityStatus.textContent = "Saving…";
+  try {
+    const res = await fetch(`/api/personality/${encodeURIComponent(agentId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const cfg = await res.json();
+    state.personality = { ...state.personality, config: cfg };
+    personalityStatus.textContent = preset === "none" ? "Cleared." : "Saved ✓";
+  } catch (err) {
+    personalityStatus.textContent = "Save failed: " + err.message;
+  } finally {
+    personalitySave.disabled = false;
+  }
+}
+
 // ----- Slash command autocomplete popover -----
 
 const SLASH_COMMANDS = [
@@ -3901,6 +4028,7 @@ function buildPaletteEntries() {
     { label: "Open MCP servers", hint: "", icon: "🔌", run: () => document.getElementById("mcp-btn").click() },
     { label: "Open Skills", hint: "", icon: "🧩", run: () => document.getElementById("skills-btn").click() },
     { label: "Open Browser automation", hint: "", icon: "🌐", run: () => document.getElementById("browser-btn").click() },
+    { label: "Open Personality", hint: "", icon: "🎭", run: () => document.getElementById("personality-btn").click() },
     { label: "Open History", hint: "⌘⇧H", icon: "📜", run: () => document.getElementById("history-btn").click() },
     { label: "Open Settings", hint: "⌘;",  icon: "⚙️", run: () => document.getElementById("settings-btn").click() },
     { label: "New chat with current agent", hint: "", icon: "🆕", run: () => document.getElementById("reset-btn").click() },
@@ -4101,6 +4229,7 @@ document.addEventListener(
         "mcp-modal",
         "skills-modal",
         "browser-modal",
+        "personality-modal",
         "settings-modal",
         "agent-modal",
       ];
