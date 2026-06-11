@@ -122,6 +122,15 @@ import {
   chunkReply as telegramChunkReply,
   type IncomingMessageContext as TelegramCtx,
 } from "./telegram.js";
+import {
+  getBrowserConfig,
+  setBrowserConfig,
+  browserOptionsFor,
+  isUrlAllowed,
+  normalizeDomain,
+  BROWSER_NAV_TOOL,
+  type BrowserMode,
+} from "./browser.js";
 
 type TaskPriority = "low" | "medium" | "high";
 type ApiTaskStatus = "queued" | "active" | "done" | "error";
@@ -411,7 +420,7 @@ app.post("/api/chat", async (req, res) => {
     for await (const msg of query({
       prompt: message,
       options: {
-        ...mcpOptionsFor(agent.id, agent.allowedTools),
+        ...agentToolOptions(agent),
         ...skillsOptionsFor(agent.id),
         systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         resume: resumeId,
@@ -419,6 +428,7 @@ app.post("/api/chat", async (req, res) => {
         model: modelId,
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
+        ...hooksOpt(buildBrowserGuardHook(agent.id)),
       },
     })) {
       const anyMsg = msg as any;
@@ -550,7 +560,7 @@ app.post("/api/chat/stream", async (req, res) => {
     for await (const msg of query({
       prompt: message,
       options: {
-        ...mcpOptionsFor(agent.id, agent.allowedTools),
+        ...agentToolOptions(agent),
         ...skillsOptionsFor(agent.id),
         systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         resume: resumeId,
@@ -560,6 +570,7 @@ app.post("/api/chat/stream", async (req, res) => {
         abortController: ac,
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
+        ...hooksOpt(buildBrowserGuardHook(agent.id)),
       },
     })) {
       if (clientClosed) break;
@@ -859,6 +870,54 @@ app.post("/api/skills/toggle", (req, res) => {
   res.json({ ok: true, enabled: !!enabled });
 });
 
+// ----- Browser automation (per-agent Playwright preset + domain gate) -----
+
+app.get("/api/browser/:agentId", (req, res) => {
+  const agentId = req.params.agentId;
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
+  res.json(getBrowserConfig(agentId));
+});
+
+app.post("/api/browser/:agentId", (req, res) => {
+  const agentId = req.params.agentId;
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
+  const body = req.body ?? {};
+  const patch: {
+    enabled?: boolean;
+    mode?: BrowserMode;
+    headless?: boolean;
+    allowedDomains?: string[];
+  } = {};
+  if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+  if (body.mode === "allowlist" || body.mode === "open") patch.mode = body.mode;
+  if (typeof body.headless === "boolean") patch.headless = body.headless;
+  if (Array.isArray(body.allowedDomains)) {
+    patch.allowedDomains = body.allowedDomains.map((d: unknown) => String(d));
+  }
+  res.json(setBrowserConfig(agentId, patch));
+});
+
+// Add or remove a single allowed domain (convenience for the UI's add/remove).
+app.post("/api/browser/:agentId/domain", (req, res) => {
+  const agentId = req.params.agentId;
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
+  const raw = (req.body?.domain ?? "").toString();
+  const domain = normalizeDomain(raw);
+  if (!domain) return res.status(400).json({ error: "invalid domain" });
+  const current = getBrowserConfig(agentId);
+  const next = Array.from(new Set([...current.allowedDomains, domain]));
+  res.json(setBrowserConfig(agentId, { allowedDomains: next }));
+});
+
+app.delete("/api/browser/:agentId/domain", (req, res) => {
+  const agentId = req.params.agentId;
+  if (!findAgent(agentId)) return res.status(400).json({ error: "unknown agent" });
+  const domain = normalizeDomain((req.body?.domain ?? "").toString());
+  const current = getBrowserConfig(agentId);
+  const next = current.allowedDomains.filter((d) => d !== domain);
+  res.json(setBrowserConfig(agentId, { allowedDomains: next }));
+});
+
 // ----- Plan mode -----
 
 app.post("/api/plan/:agentId", (req, res) => {
@@ -958,14 +1017,14 @@ app.post("/api/task/:id/run", async (req, res) => {
     for await (const msg of query({
       prompt: checked.description,
       options: {
-        ...mcpOptionsFor(agent.id, agent.allowedTools),
+        ...agentToolOptions(agent),
         ...skillsOptionsFor(agent.id),
         systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         cwd: currentCwd,
         model: effectiveModel(agent.id),
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
-        ...(approvalHook ? { hooks: approvalHook } : {}),
+        ...hooksOpt(mergeHooks(approvalHook, buildBrowserGuardHook(agent.id))),
       },
     })) {
       const anyMsg = msg as any;
@@ -1354,6 +1413,84 @@ function cwdIsProductionMarked(cwd: string): boolean {
   return false;
 }
 
+// ============================================================================
+// Combined per-agent tool options (MCP user servers + Browser preset)
+// ============================================================================
+//
+// mcpOptionsFor returns {allowedTools, mcpServers?} for the agent's user-
+// configured MCP servers. browserOptionsFor adds the Playwright MCP server +
+// the `mcp__browser` allow-token when the agent has browser enabled. They both
+// touch allowedTools + mcpServers, so we MUST merge them rather than spread
+// separately (a second spread would clobber the first's mcpServers).
+function agentToolOptions(agent: { id: string; allowedTools: string[] }): {
+  allowedTools: string[];
+  // The Playwright preset's stdio config is a valid McpServerConfig; widen to
+  // `any` so the merged map stays assignable to the SDK's mcpServers option.
+  mcpServers?: Record<string, any>;
+} {
+  const mcp = mcpOptionsFor(agent.id, agent.allowedTools);
+  const browser = browserOptionsFor(agent.id);
+  if (!browser) return mcp;
+  return {
+    allowedTools: [...mcp.allowedTools, ...browser.allowTokens],
+    mcpServers: { ...(mcp.mcpServers ?? {}), ...browser.servers },
+  };
+}
+
+// Per-domain browser navigation gate. When an agent has browser enabled, a
+// PreToolUse hook on `browser_navigate` runs isUrlAllowed() — the authoritative
+// floor (private-IP + obfuscation-aware) plus the allow-list. Playwright's
+// own --allowed-origins/--blocked-origins flags catch link-click navigation;
+// this hook is the explicit-nav gate + the IP-parsing the origin strings miss.
+function buildBrowserGuardHook(
+  agentId: string,
+): Partial<Record<"PreToolUse", HookCallbackMatcher[]>> | undefined {
+  if (!getBrowserConfig(agentId).enabled) return undefined;
+  const callback: HookCallback = async (input) => {
+    const pre = input as PreToolUseHookInput;
+    const url = (pre.tool_input as { url?: string })?.url ?? "";
+    const verdict = isUrlAllowed(agentId, url);
+    if (verdict.allowed) {
+      return {
+        hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" },
+      };
+    }
+    console.warn(`[browser] denied navigation for ${agentId}: ${verdict.reason}`);
+    return {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: `Browser navigation blocked: ${verdict.reason}`,
+      },
+    };
+  };
+  return {
+    PreToolUse: [
+      { matcher: `^${BROWSER_NAV_TOOL}$`, timeout: 60, hooks: [callback] },
+    ],
+  };
+}
+
+// Merge multiple optional `{ PreToolUse: [...] }` hook objects into one (or
+// undefined if all are empty). Used to combine the approval hook + the browser
+// guard hook on a single query() call.
+function mergeHooks(
+  ...objs: (Partial<Record<"PreToolUse", HookCallbackMatcher[]>> | undefined)[]
+): Partial<Record<"PreToolUse", HookCallbackMatcher[]>> | undefined {
+  const matchers: HookCallbackMatcher[] = [];
+  for (const o of objs) {
+    if (o?.PreToolUse) matchers.push(...o.PreToolUse);
+  }
+  return matchers.length ? { PreToolUse: matchers } : undefined;
+}
+
+// Spread-helper: turn an optional hooks object into `{ hooks }` or `{}`.
+function hooksOpt(
+  h: Partial<Record<"PreToolUse", HookCallbackMatcher[]>> | undefined,
+): { hooks?: Partial<Record<"PreToolUse", HookCallbackMatcher[]>> } {
+  return h ? { hooks: h } : {};
+}
+
 // Builds the PreToolUse hook configuration the SDK accepts. Returns
 // `undefined` when there's nothing to gate, so the caller can spread it
 // conditionally into `query()` options without a flag.
@@ -1571,14 +1708,14 @@ const fireScheduledTask: OnFire = async (
     for await (const msg of query({
       prompt: ctx.prompt,
       options: {
-        ...mcpOptionsFor(agent.id, agent.allowedTools),
+        ...agentToolOptions(agent),
         ...skillsOptionsFor(agent.id),
         systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         cwd: fireCwd,
         model: effectiveModel(agent.id),
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
-        ...(scheduledHook ? { hooks: scheduledHook } : {}),
+        ...hooksOpt(mergeHooks(scheduledHook, buildBrowserGuardHook(agent.id))),
       },
     })) {
       const anyMsg = msg as any;
@@ -1960,7 +2097,7 @@ const onTelegramMessage = async (ctx: TelegramCtx): Promise<void> => {
     for await (const msg of query({
       prompt,
       options: {
-        ...mcpOptionsFor(agent.id, agent.allowedTools),
+        ...agentToolOptions(agent),
         ...skillsOptionsFor(agent.id),
         systemPrompt: augmentedSystemPrompt(agent.id, agent.systemPrompt),
         cwd: currentCwd,
@@ -1968,6 +2105,7 @@ const onTelegramMessage = async (ctx: TelegramCtx): Promise<void> => {
         ...(resumeId ? { resume: resumeId } : {}),
         ...(plan ? { permissionMode: "plan" as const } : {}),
         ...(subAgents ? { agents: subAgents } : {}),
+        ...hooksOpt(buildBrowserGuardHook(agent.id)),
       },
     })) {
       const anyMsg = msg as any;

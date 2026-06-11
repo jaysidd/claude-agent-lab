@@ -261,6 +261,7 @@ function selectAgent(id) {
   refreshPinCount();
   refreshMcpCount();
   refreshSkillsCount();
+  refreshBrowserCount();
   input.focus();
 }
 
@@ -1746,6 +1747,7 @@ state.skills = [];
 function closeSkillsModal() {
   skillsModal.classList.add("hidden");
   refreshSkillsCount();
+  refreshBrowserCount();
 }
 skillsBtn.addEventListener("click", openSkillsModal);
 skillsCloseBtn.addEventListener("click", closeSkillsModal);
@@ -1865,6 +1867,191 @@ async function refreshSkillsCount() {
     const n = (data.skills || []).filter((s) => s.enabled).length;
     skillsCount.textContent = n;
     skillsCount.classList.toggle("has-active", n > 0);
+  } catch {
+    /* noop */
+  }
+}
+
+// ----- Browser automation -----
+
+const browserBtn = document.getElementById("browser-btn");
+const browserCount = document.getElementById("browser-count");
+const browserModal = document.getElementById("browser-modal");
+const browserCloseBtn = document.getElementById("browser-close");
+const browserAgentSelect = document.getElementById("browser-agent");
+const browserEnabled = document.getElementById("browser-enabled");
+const browserConfigBlock = document.getElementById("browser-config");
+const browserHeadless = document.getElementById("browser-headless");
+const browserDomainsBlock = document.getElementById("browser-domains-block");
+const browserDomainInput = document.getElementById("browser-domain-input");
+const browserDomainAdd = document.getElementById("browser-domain-add");
+const browserDomainsList = document.getElementById("browser-domains-list");
+
+state.browserConfig = null;
+
+function closeBrowserModal() {
+  browserModal.classList.add("hidden");
+  refreshBrowserCount();
+}
+browserBtn.addEventListener("click", openBrowserModal);
+browserCloseBtn.addEventListener("click", closeBrowserModal);
+browserModal.addEventListener("click", (e) => {
+  if (e.target === browserModal) closeBrowserModal();
+});
+browserAgentSelect.addEventListener("change", refreshBrowser);
+browserEnabled.addEventListener("change", () => saveBrowser({ enabled: browserEnabled.checked }));
+browserHeadless.addEventListener("change", () => saveBrowser({ headless: browserHeadless.checked }));
+browserDomainAdd.addEventListener("click", addBrowserDomain);
+browserDomainInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addBrowserDomain();
+  }
+});
+
+function populateBrowserAgentSelect() {
+  const prev = browserAgentSelect.value || state.activeAgentId;
+  browserAgentSelect.innerHTML = "";
+  for (const a of state.agents) {
+    const opt = document.createElement("option");
+    opt.value = a.id;
+    opt.textContent = `${a.emoji} ${a.name}`;
+    browserAgentSelect.appendChild(opt);
+  }
+  if (prev && state.agents.some((a) => a.id === prev)) browserAgentSelect.value = prev;
+}
+
+async function openBrowserModal() {
+  populateBrowserAgentSelect();
+  await refreshBrowser();
+  browserModal.classList.remove("hidden");
+}
+
+async function refreshBrowser() {
+  const agentId = browserAgentSelect.value;
+  if (!agentId) {
+    state.browserConfig = null;
+    renderBrowser();
+    return;
+  }
+  try {
+    const res = await fetch(`/api/browser/${encodeURIComponent(agentId)}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.browserConfig = await res.json();
+  } catch (err) {
+    console.warn("refreshBrowser failed:", err);
+    state.browserConfig = null;
+  }
+  renderBrowser();
+}
+
+function renderBrowser() {
+  const c = state.browserConfig;
+  if (!c) {
+    browserConfigBlock.classList.add("hidden");
+    return;
+  }
+  browserEnabled.checked = c.enabled;
+  browserHeadless.checked = c.headless;
+  browserConfigBlock.classList.toggle("hidden", !c.enabled);
+
+  browserDomainsList.innerHTML = "";
+  if ((c.allowedDomains || []).length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "col-empty";
+    empty.textContent = "No domains allowed yet. The agent can't browse until you add one.";
+    browserDomainsList.appendChild(empty);
+  } else {
+    for (const d of c.allowedDomains) {
+      const li = document.createElement("li");
+      li.className = "memory-card";
+      const meta = document.createElement("div");
+      meta.className = "memory-meta";
+      const badge = document.createElement("span");
+      badge.className = "memory-badge pin-file";
+      badge.textContent = "🌐 domain";
+      meta.appendChild(badge);
+      const name = document.createElement("span");
+      name.className = "memory-scope pin-content-preview";
+      name.textContent = d;
+      meta.appendChild(name);
+      const del = document.createElement("button");
+      del.className = "memory-delete";
+      del.title = "Remove domain";
+      del.textContent = "×";
+      del.addEventListener("click", () => removeBrowserDomain(d));
+      li.append(meta, del);
+      browserDomainsList.appendChild(li);
+    }
+  }
+  // Header count reflects enabled state.
+  if (browserAgentSelect.value === state.activeAgentId) {
+    browserCount.textContent = c.enabled ? "on" : "0";
+    browserCount.classList.toggle("has-active", c.enabled);
+  }
+}
+
+async function saveBrowser(patch) {
+  const agentId = browserAgentSelect.value;
+  if (!agentId) return;
+  try {
+    const res = await fetch(`/api/browser/${encodeURIComponent(agentId)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    state.browserConfig = await res.json();
+    renderBrowser();
+  } catch (err) {
+    alert("Could not save browser settings: " + err.message);
+  }
+}
+
+async function addBrowserDomain() {
+  const domain = browserDomainInput.value.trim();
+  if (!domain) return;
+  const agentId = browserAgentSelect.value;
+  try {
+    const res = await fetch(`/api/browser/${encodeURIComponent(agentId)}/domain`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error);
+    browserDomainInput.value = "";
+    state.browserConfig = data;
+    renderBrowser();
+  } catch (err) {
+    alert("Could not add domain: " + err.message);
+  }
+}
+
+async function removeBrowserDomain(domain) {
+  const agentId = browserAgentSelect.value;
+  try {
+    const res = await fetch(`/api/browser/${encodeURIComponent(agentId)}/domain`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ domain }),
+    });
+    state.browserConfig = await res.json();
+    renderBrowser();
+  } catch {
+    /* noop */
+  }
+}
+
+async function refreshBrowserCount() {
+  const agentId = state.activeAgentId;
+  if (!agentId || !browserCount) return;
+  try {
+    const res = await fetch(`/api/browser/${encodeURIComponent(agentId)}`);
+    if (!res.ok) return;
+    const c = await res.json();
+    browserCount.textContent = c.enabled ? "on" : "0";
+    browserCount.classList.toggle("has-active", c.enabled);
   } catch {
     /* noop */
   }
@@ -3713,6 +3900,7 @@ function buildPaletteEntries() {
     { label: "Open Pins", hint: "", icon: "📌", run: () => document.getElementById("pins-btn").click() },
     { label: "Open MCP servers", hint: "", icon: "🔌", run: () => document.getElementById("mcp-btn").click() },
     { label: "Open Skills", hint: "", icon: "🧩", run: () => document.getElementById("skills-btn").click() },
+    { label: "Open Browser automation", hint: "", icon: "🌐", run: () => document.getElementById("browser-btn").click() },
     { label: "Open History", hint: "⌘⇧H", icon: "📜", run: () => document.getElementById("history-btn").click() },
     { label: "Open Settings", hint: "⌘;",  icon: "⚙️", run: () => document.getElementById("settings-btn").click() },
     { label: "New chat with current agent", hint: "", icon: "🆕", run: () => document.getElementById("reset-btn").click() },
@@ -3912,6 +4100,7 @@ document.addEventListener(
         "pins-modal",
         "mcp-modal",
         "skills-modal",
+        "browser-modal",
         "settings-modal",
         "agent-modal",
       ];

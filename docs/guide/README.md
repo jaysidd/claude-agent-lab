@@ -55,6 +55,7 @@ How agents do real work, and how you extend them.
 | Page | What it covers |
 |---|---|
 | [Tools and MCP Servers](./tools-and-mcp.md) | Per-agent tool allowlists, MCP servers (stdio/http/sse), the Test button |
+| [Browser Automation](./browser-automation.md) | Give an agent a real browser behind a per-domain allow-list |
 | [Skills](./skills.md) | Per-agent Agent Skills from `.claude/skills`, toggle + rescan |
 | [Telegram Bridge](./telegram-bridge.md) | Drive the same agents from your phone, allowlist-gated |
 | [Voice (WhisprDesk)](./voice.md) | Speak to your agents and have replies read aloud |
