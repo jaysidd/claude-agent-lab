@@ -1877,7 +1877,7 @@ const SLASH_COMMANDS = [
   { cmd: "/clear", desc: "new conversation with this agent" },
   { cmd: "/agents", desc: "list all agents and what they do" },
   { cmd: "/model", desc: "show current model + options" },
-  { cmd: "/model opus", desc: "switch to Opus 4.7 (careful reasoning)" },
+  { cmd: "/model opus", desc: "switch to Opus 4.8 (careful reasoning)" },
   { cmd: "/model sonnet", desc: "switch to Sonnet 4.6 (balanced default)" },
   { cmd: "/model haiku", desc: "switch to Haiku 4.5 (fast, cheap)" },
   { cmd: "/think hard", desc: "alias for /model opus" },
@@ -2011,7 +2011,7 @@ function handleSlashCommand(text) {
   if (cmd === "think") {
     const agent = state.agents.find((a) => a.id === agentId);
     const mapping = {
-      hard: { id: "claude-opus-4-7", label: "Opus 4.7" },
+      hard: { id: "claude-opus-4-8", label: "Opus 4.8" },
       fast: { id: "claude-haiku-4-5", label: "Haiku 4.5" },
       default: { id: agent?.defaultModel, label: null },
     };
@@ -2058,14 +2058,14 @@ function handleSlashCommand(text) {
       say(
         [
           `Current model for **${current?.name}**: \`${current?.model}\``,
-          "Available: `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`.",
+          "Available: `claude-opus-4-8`, `claude-sonnet-4-6`, `claude-haiku-4-5`.",
           "Use `/model <id>` (aliases: opus, sonnet, haiku).",
         ].join("\n\n"),
       );
       return true;
     }
     const aliases = {
-      opus: "claude-opus-4-7",
+      opus: "claude-opus-4-8",
       sonnet: "claude-sonnet-4-6",
       haiku: "claude-haiku-4-5",
     };

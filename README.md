@@ -36,7 +36,7 @@ Each feature maps to **one or two options** on the SDK's `query()` call. Reading
 | [Sub-agent delegation](#sub-agent-delegation) | `agents: Record<string, AgentDefinition>` + `Agent` tool |
 | [Token-by-token streaming](#token-by-token-streaming) | `includePartialMessages: true` → `stream_event` messages |
 | [Folder scoping](#folder-scoping) | `cwd` |
-| [Per-agent model selection](#per-agent-model-selection) | `model: "claude-opus-4-7" \| "claude-sonnet-4-6" \| "claude-haiku-4-5"` |
+| [Per-agent model selection](#per-agent-model-selection) | `model: "claude-opus-4-8" \| "claude-sonnet-4-6" \| "claude-haiku-4-5"` |
 | [Task queue with auto-routing](#task-queue-with-auto-routing) | One-shot Haiku `query()` as a classifier |
 | [Durable task queue (SQLite + atomic checkout)](#durable-task-queue) | Tasks survive restart; lease-based crash recovery; concurrent-safe checkout |
 | [Budget caps (CostGuard)](#budget-caps-costguard) | Preflight `check()` before every `query()`; cost cap + rate cap; OAuth-aware |
@@ -61,7 +61,7 @@ Four built-in specialists, each defined by a ~20-line object in [`src/agents.ts`
 
 - **🧭 Main** — triage + router, no direct tools
 - **✉️ Comms** — drafts messages, `WebFetch`
-- **🎬 Content** — YouTube / long-form writing, `WebSearch` + `WebFetch`, **Opus 4.7**
+- **🎬 Content** — YouTube / long-form writing, `WebSearch` + `WebFetch`, **Opus 4.8**
 - **⚙️ Ops** — reads local files in the selected folder, `Read` / `Glob` / `Grep`, read-only
 
 The bottom of the sidebar has a prominent gradient **+ New agent** button — spawning specialists is a first-class operation, not a hidden escape hatch.
@@ -271,7 +271,7 @@ Type `/` and a **live autocomplete popover** appears above the composer — same
 | `/agents` | List all agents with their descriptions and default models |
 | `/model` | Show current model + available options |
 | `/model <id>` | Switch model for this agent. Aliases: `opus`, `sonnet`, `haiku` |
-| `/think hard` | Ergonomic alias: switch to Opus 4.7 (careful reasoning) |
+| `/think hard` | Ergonomic alias: switch to Opus 4.8 (careful reasoning) |
 | `/think fast` | Alias: switch to Haiku 4.5 (snappy, cheap) |
 | `/think default` | Reset to the agent's configured default |
 | `/plan on\|off` | Toggle plan mode for this agent |
@@ -566,7 +566,7 @@ sequenceDiagram
 
 **Wire shape** (real sample):
 ```
-{"kind":"init","sessionId":"3cf37180-...","model":"claude-opus-4-7","apiKeySource":"none"}
+{"kind":"init","sessionId":"3cf37180-...","model":"claude-opus-4-8","apiKeySource":"none"}
 {"kind":"text_delta","text":"Here are 3 You"}
 {"kind":"text_delta","text":"Tube title ideas:\n\n1. I Built an AI Agent in "}
 {"kind":"text_delta","text":"10 Minutes\n2. Claude Agent SDK: The Missing Begin"}

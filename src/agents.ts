@@ -11,7 +11,7 @@ export type AgentConfig = {
 };
 
 export const MODELS = [
-  { id: "claude-opus-4-7", label: "Opus 4.7", blurb: "Smartest. Slower, pricier on API." },
+  { id: "claude-opus-4-8", label: "Opus 4.8", blurb: "Smartest. Slower, pricier on API." },
   { id: "claude-sonnet-4-6", label: "Sonnet 4.6", blurb: "Balanced. Great default." },
   { id: "claude-haiku-4-5", label: "Haiku 4.5", blurb: "Fastest & cheapest. Simple tasks." },
 ];
@@ -74,7 +74,7 @@ You help plan YouTube videos, write scripts, brainstorm hooks,
 outline posts, and come up with titles. Bias toward specific, concrete ideas
 over vague advice. When drafting a script, use short lines and a natural speaking rhythm.`,
     allowedTools: ["WebSearch", "WebFetch"],
-    model: "claude-opus-4-7",
+    model: "claude-opus-4-8",
   },
   ops: {
     id: "ops",

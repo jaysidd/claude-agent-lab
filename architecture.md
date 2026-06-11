@@ -182,7 +182,7 @@ Current defaults:
 |---|---|---|---|
 | Main | (none) | Sonnet 4.6 | Pure reasoning, routing, triage |
 | Comms | `WebFetch` | Sonnet 4.6 | Draft messages; sometimes pull context |
-| Content | `WebSearch`, `WebFetch` | **Opus 4.7** | Best creative output |
+| Content | `WebSearch`, `WebFetch` | **Opus 4.8** | Best creative output |
 | Ops | `Read`, `Glob`, `Grep` | Sonnet 4.6 | Read files in current cwd |
 
 Adding a new agent = one entry in this file. No server changes needed.
@@ -200,7 +200,7 @@ Gotcha: **changing `cwd` mid-session confuses the agent** (context includes the 
 ## Model selection
 
 Three models wired via `MODELS` in `agents.ts`:
-- `claude-opus-4-7` — best creative/reasoning
+- `claude-opus-4-8` — best creative/reasoning
 - `claude-sonnet-4-6` — balanced default
 - `claude-haiku-4-5` — fastest/cheapest
 
