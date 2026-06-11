@@ -22,8 +22,11 @@ data/
 *.db-wal
 *.db-shm
 
-# Local Claude Code state if it ever lands inside this project dir
-.claude/
+# Local Claude Code state if it ever lands inside this project dir.
+# Ignore the dir's contents but keep the shared project settings.json
+# committed — it carries the README-freshness Stop hook.
+.claude/*
+!.claude/settings.json
 .claude.json
 
 # OS
