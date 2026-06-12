@@ -85,7 +85,7 @@ const seedMems = [
   { content: "Name: Jay. Company: Clawless. Closes emails with '— J'.", category: "fact" },
   { content: "Prefers short, direct replies — no preamble, no filler.", category: "preference" },
   {
-    content: "Building Clawd Desk as an educational reference for the Agent SDK.",
+    content: "Building ClawdDesk as an educational reference for the Agent SDK.",
     category: "context",
   },
 ];

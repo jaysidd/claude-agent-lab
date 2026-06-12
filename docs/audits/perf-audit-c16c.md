@@ -131,7 +131,7 @@ One nuance worth noting (not a bug): on a stream that's aborted before any `syst
 - typical (caps set, ledger small): **~25 µs** (resolver + 1.9 µs rate + ~1 µs month at <100 rows)
 - pathological (caps set, 10k+ rows in month for agent): up to **~6 ms** worst case
 
-For a single-user, single-process Express server on `:3333`, blocking the event loop for 25 µs per request is invisible. It would matter if Clawd Desk ever became multi-tenant or fronted concurrent SDK calls (Clawless territory). It does not matter today.
+For a single-user, single-process Express server on `:3333`, blocking the event loop for 25 µs per request is invisible. It would matter if ClawdDesk ever became multi-tenant or fronted concurrent SDK calls (Clawless territory). It does not matter today.
 
 **Recommendation:** Accept. If/when the Clawless lift happens and concurrency matters, the path can move to a worker thread or async sqlite binding — but that's an architectural change, not a CostGuard fix.
 

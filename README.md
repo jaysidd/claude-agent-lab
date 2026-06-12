@@ -1,4 +1,4 @@
-# Clawd Desk, a Claude Agent SDK learning lab
+# ClawdDesk, a Claude Agent SDK learning lab
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Claude Agent SDK](https://img.shields.io/badge/built_on-Claude_Agent_SDK-8b9eff)](https://code.claude.com/docs/en/agent-sdk/overview)
@@ -7,9 +7,9 @@
 
 A small, hackable **multi-agent dashboard** built directly on Anthropic's official [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Four built-in specialists plus **unlimited custom agents** you spawn from the sidebar, each with its own system prompt, tool allowlist, and model. A router that delegates to specialists. **Durable SQLite-backed task queue** with atomic checkout and lease-based crash recovery. **Cron-style scheduler** that wakes agents on a schedule. **Per-task approval gates** that pause dangerous tools for sign-off. **Per-agent budget caps** (cost + rate) enforced before every SDK call. **Context pins**, **MCP servers**, and **Skills** configurable per agent. A **Telegram bridge** so you can drive the same agents from your phone. Token-by-token streaming, folder scoping, `@file` / `/command` autocomplete, persistent SQLite memory, conversation history with restore-and-resume, OAuth-aware cost tracking, Markdown / JSON export, a ⌘K command palette, and voice I/O via [WhisprDesk](https://whisprdesk.com/).
 
-All in ~13,900 lines of hand-written code across `src/`, `public/`, and `tests/` — because most of the engine work is already inside the SDK.
+All in ~18,000 lines of hand-written code across `src/`, `public/`, and `tests/` — because most of the engine work is already inside the SDK.
 
-![Clawd Desk — overview](docs/screenshots/01-overview.png)
+![ClawdDesk — overview](docs/screenshots/01-overview.png)
 
 > 📖 **New here?** The [**User Guide**](docs/guide/) is a friendly, task-oriented walkthrough of every surface — start with [Getting Started](docs/guide/getting-started.md). This README is the "what and why"; the guide is the "how do I actually use it."
 
@@ -21,7 +21,7 @@ All in ~13,900 lines of hand-written code across `src/`, `public/`, and `tests/`
 
 A YouTuber demonstrated a "command center" agent dashboard built on an open-source multi-provider agent CLI, and casually mentioned it took ~6–7 weeks. I wanted to see how much of that is the engine work that the official Claude Agent SDK now hands you for free, and how much is the actual product work that still stands on its own.
 
-The answer: when Claude is the target model, the SDK collapses the engine layer to a function call. Clawd Desk exists as a concrete, readable example of how thin that layer can be — and a sandbox to explore what the SDK makes easy that used to be hard.
+The answer: when Claude is the target model, the SDK collapses the engine layer to a function call. ClawdDesk exists as a concrete, readable example of how thin that layer can be — and a sandbox to explore what the SDK makes easy that used to be hard.
 
 If you need multi-provider (OpenAI / Ollama / OpenRouter / local), this isn't the right starting point — check out **[Clawless](https://clawless.ai/)**, a polished desktop app I'm building with full multi-provider support (Anthropic, OpenAI, Gemini, Ollama, and more). Same author as this lab. *Public launch in ~2 weeks — visit [clawless.ai](https://clawless.ai/) for early-access updates.*
 
@@ -214,7 +214,7 @@ Preferences:
 Facts:
 - Name: Jay. Company: Clawless. Closes emails with '— J'.
 Context:
-- Building Clawd Desk as an educational reference for the Agent SDK.
+- Building ClawdDesk as an educational reference for the Agent SDK.
 </persistent-memory>
 ```
 
@@ -311,7 +311,7 @@ Two cap axes, both per-agent (with global defaults):
 - **Cost cap** — monthly USD ceiling. **OAuth providers bypass this** — Max plan is flat-rate, so dollar accounting against a Max session is nonsense. API-key sessions enforce it.
 - **Rate cap** — requests-per-window ceiling. **Always enforced**, regardless of provider, because rate-limit posture matters even when the cost is $0.
 
-The signature was [locked across two projects](backlog.md) (Clawd Desk + the multi-provider sister app [Clawless](https://clawless.ai/)) so the same `src/costGuard.ts` lifts mechanically into either codebase:
+The signature was [locked across two projects](backlog.md) (ClawdDesk + the multi-provider sister app [Clawless](https://clawless.ai/)) so the same `src/costGuard.ts` lifts mechanically into either codebase:
 
 ```ts
 costGuard.check(agentId: string, estimatedTokens?: number): {
@@ -435,13 +435,13 @@ Secrets never round-trip to the browser: the UI shows a masked preview (`••�
 
 ### Voice in / out via WhisprDesk
 
-If you have [**WhisprDesk**](https://whisprdesk.com/) running locally, Clawd Desk integrates with it in three ways out of the box:
+If you have [**WhisprDesk**](https://whisprdesk.com/) running locally, ClawdDesk integrates with it in three ways out of the box:
 
-![Clawd Desk overview showing the WhisprDesk status indicator](docs/screenshots/01-overview.png)
+![ClawdDesk overview showing the WhisprDesk status indicator](docs/screenshots/01-overview.png)
 
 **Active mode (mic button or `⌥V`):** A 🎤 button next to Send — or the keyboard shortcut **`⌥V`** (Option+V on macOS, Alt+V elsewhere) — records audio via `MediaRecorder`. Click again / press `⌥V` again to stop. The WebM/Opus audio is decoded in the browser via the Web Audio API, re-encoded as mono 16-bit PCM WAV (so server-side ffmpeg decoders always succeed on the output regardless of MediaRecorder quirks), then POSTs to `/api/whisprdesk/transcribe`. Server adds the Bearer header; transcript drops into the composer, ready to edit or send with `Enter`. A live pink banner above the composer shows the elapsed recording time and the stop instruction.
 
-**Passive mode (SSE listener):** The server subscribes to WhisprDesk's `/v1/events` stream. Any dictation you do *anywhere* on your Mac via WhisprDesk's native push-to-talk shortcut — as long as Clawd Desk is the focused tab — auto-fills the composer. You keep the muscle memory; the lab just steals the transcript.
+**Passive mode (SSE listener):** The server subscribes to WhisprDesk's `/v1/events` stream. Any dictation you do *anywhere* on your Mac via WhisprDesk's native push-to-talk shortcut — as long as ClawdDesk is the focused tab — auto-fills the composer. You keep the muscle memory; the lab just steals the transcript.
 
 **Voice out:** Each agent reply gets a 🔊 button that uses the browser's built-in `SpeechSynthesis` API to read the reply aloud. Click again to stop.
 
@@ -453,7 +453,7 @@ If you have [**WhisprDesk**](https://whisprdesk.com/) running locally, Clawd Des
 >
 > - 🔒 **Local-only** — no cloud, no accounts, no telemetry
 > - ⚡ **Real-time** — transcription lands as you speak
-> - 🧩 **Open gateway** — the same External App Gateway Clawd Desk uses, so any app you write can plug in
+> - 🧩 **Open gateway** — the same External App Gateway ClawdDesk uses, so any app you write can plug in
 > - 💲 **One-time $29** — no subscription, no seat pricing, lifetime updates
 >
 > **→ Grab it at [whisprdesk.com](https://whisprdesk.com/)**
@@ -497,8 +497,8 @@ Then open [http://localhost:3333](http://localhost:3333). The server binds to `1
 The repo ships a `.command` file that, when double-clicked, kills any previous server on :3333, runs `npm install` if needed, starts the server, waits for readiness, and opens the browser. Copy it to your Desktop for a double-clickable launcher:
 
 ```bash
-cp scripts/launch-clawd-desk.command "$HOME/Desktop/Clawd Desk.command"
-chmod +x "$HOME/Desktop/Clawd Desk.command"
+cp scripts/launch-clawddesk.command "$HOME/Desktop/ClawdDesk.command"
+chmod +x "$HOME/Desktop/ClawdDesk.command"
 ```
 
 First double-click: macOS Gatekeeper may block an unsigned script. Right-click the icon → **Open** → confirm once; after that it launches without prompts. The script respects a `COMMAND_CENTER_DIR` env var if your clone lives somewhere other than `~/Desktop/clawddesk`.
@@ -743,7 +743,7 @@ stateDiagram-v2
   end note
 ```
 
-The 5-state enum is the wire shape across both Clawd Desk and Clawless's task queue (B54). The `running` state from C03's in-memory version was dropped — it was a worker-side concern, not queue-side. `failed` is reachable only after `attempts ≥ max_attempts`; otherwise `fail()` loops back to `queued`.
+The 5-state enum is the wire shape across both ClawdDesk and Clawless's task queue (B54). The `running` state from C03's in-memory version was dropped — it was a worker-side concern, not queue-side. `failed` is reachable only after `attempts ≥ max_attempts`; otherwise `fail()` loops back to `queued`.
 
 ---
 
@@ -861,7 +861,7 @@ clawddesk/
 │   ├── audits/               # Per-feature Performance + Security audit reports
 │   └── screenshots/          # The images used in this README
 ├── scripts/
-│   ├── launch-clawd-desk.command  # Double-clickable macOS launcher
+│   ├── launch-clawddesk.command  # Double-clickable macOS launcher
 │   └── screenshot.mjs        # Playwright script that captures README images
 ├── CLAUDE.md                 # Project conventions (six-role dev team, etc.)
 ├── architecture.md           # Technical architecture
@@ -948,7 +948,7 @@ The six-role dev-team convention the repo uses (Architect → Developer → Revi
 ## Acknowledgements
 
 - **Anthropic** for the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview) and for making `@anthropic-ai/claude-agent-sdk` open and approachable.
-- **[WhisprDesk](https://whisprdesk.com/)** — the one-time-$29 local Whisper dictation app that Clawd Desk's voice layer integrates with. Audio stays on your Mac; the gateway pattern means *any* app on your machine can share the STT pipeline.
+- **[WhisprDesk](https://whisprdesk.com/)** — the one-time-$29 local Whisper dictation app that ClawdDesk's voice layer integrates with. Audio stays on your Mac; the gateway pattern means *any* app on your machine can share the STT pipeline.
 - The YouTuber who demonstrated a command-center pattern on top of OpenClaw and got me thinking about how thin this layer could actually be when Claude is the target model.
 - **[Clawless](https://clawless.ai/)** — my own desktop app with full multi-provider AI support, the natural next step if you outgrow this lab's Claude-only scope. Coming soon.
 

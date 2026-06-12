@@ -19,7 +19,7 @@ function seedLedgerRow(agentId: string): void {
   db.close();
 }
 
-test.describe("Clawd Desk — new features smoke (no engine)", () => {
+test.describe("ClawdDesk — new features smoke (no engine)", () => {
   test("memory panel: open, add, list, delete", async ({ page, request }) => {
     // Clean slate — iterate and delete
     const existing = await (await request.get("http://localhost:3333/api/memories")).json();

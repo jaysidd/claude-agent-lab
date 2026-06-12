@@ -1,5 +1,5 @@
 // Bootstrap singleton for CostGuard. Wires the standalone primitive
-// (src/costGuard.ts) to the Clawd Desk's existing better-sqlite3 handle and
+// (src/costGuard.ts) to the ClawdDesk's existing better-sqlite3 handle and
 // the settings-table-backed cap resolver. Mirrors taskQueueInstance.ts.
 
 import { db } from "./memory.js";

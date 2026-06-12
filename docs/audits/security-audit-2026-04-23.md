@@ -1,4 +1,4 @@
-# Clawd Desk — Security Audit (2026-04-23)
+# ClawdDesk — Security Audit (2026-04-23)
 
 ## Threat profile
 
@@ -74,7 +74,7 @@ Message bodies, task descriptions, task results/errors, and tool-chip text all u
 - **app.js:67-74** — agent list uses `innerHTML` with `${agent.emoji}`, `${agent.name}`, `${agent.description}`, `${prettyModel(agent.model)}`. Today these come from `agents.ts` (trusted). If agent metadata ever becomes user-editable (memory, persistence, sub-agent definitions from the SDK response), this is a direct XSS sink.
 - **app.js:114-117** — empty-state uses `${shortenPath(state.cwd)}` and `${prettyModel(agent?.model)}` inside a template. `state.cwd` is a path the **user** sets, and they can set it to `</code><img src=x onerror=alert(1)>`. Self-XSS only (you attack yourself), but still wrong.
 - **app.js:167** — footer uses `prettyModel(m.model)` where `m.model` comes from the SDK init message. SDK-controlled, low risk, but same pattern.
-- **app.js:453** — `${f.name}` for filenames from `/api/files`. A file literally named `<img src=x onerror=...>.md` on disk would fire. Contrived, but this is the realistic XSS path: user clones a hostile repo, opens Clawd Desk, filename autocompletion renders the payload.
+- **app.js:453** — `${f.name}` for filenames from `/api/files`. A file literally named `<img src=x onerror=...>.md` on disk would fire. Contrived, but this is the realistic XSS path: user clones a hostile repo, opens ClawdDesk, filename autocompletion renders the payload.
 
 **Mitigation**: switch these to DOM-built nodes with `textContent`, or route interpolations through a small `escapeHtml()` helper. The `f.name` one on line 453 is the one to fix first.
 
@@ -92,7 +92,7 @@ For commercial: keep any API key in server env only. Never place keys on `window
 
 ## User-disclosure copy (proposed)
 
-> **Clawd Desk runs agents on your machine with your Claude Max plan.** Anything you type, any folder you point it at, and any URL an agent fetches is sent through Anthropic's API under your account. Ops can read any file inside the folder you select — treat that folder like you'd treat a shared screen.
+> **ClawdDesk runs agents on your machine with your Claude Max plan.** Anything you type, any folder you point it at, and any URL an agent fetches is sent through Anthropic's API under your account. Ops can read any file inside the folder you select — treat that folder like you'd treat a shared screen.
 >
 > **Agents follow instructions they find.** If you point Ops at a folder with untrusted files, or ask Comms/Content to fetch an untrusted URL, the content of those files and pages can influence what the agent does next. Stick to folders and links you'd read yourself.
 >

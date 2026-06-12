@@ -1,4 +1,4 @@
-# Clawd Desk — Performance Audit (2026-04-23)
+# ClawdDesk — Performance Audit (2026-04-23)
 
 ## Headline
 

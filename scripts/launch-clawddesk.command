@@ -1,5 +1,5 @@
 #!/bin/bash
-# Clawd Desk — double-click launcher (macOS)
+# ClawdDesk — double-click launcher (macOS)
 #
 # Flow:
 #   1. Kill any prior instance, both by command-pattern AND by port :3333
@@ -57,11 +57,11 @@ else
   fi
 fi
 
-printf "\033]0;Clawd Desk\a"  # Terminal title
+printf "\033]0;ClawdDesk\a"  # Terminal title
 
 cat <<BANNER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Clawd Desk — launcher
+  ClawdDesk — launcher
   $PROJECT_DIR
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -89,7 +89,7 @@ if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
   echo ""
   echo "Fix: set the env var before launching, e.g."
   echo "  CLAWDDESK_DIR=/full/path/to/clawddesk \\"
-  echo "    open 'Clawd Desk.command'"
+  echo "    open 'ClawdDesk.command'"
   echo ""
   echo "Or edit the candidate list near the top of this file."
   pause_and_exit 1
@@ -100,7 +100,7 @@ cd "$PROJECT_DIR" || pause_and_exit 1
 # -----------------------------------------------------------------------------
 # Step 1 & 2 — aggressive kill of prior instance, then wait for port to free
 # -----------------------------------------------------------------------------
-echo "🛑 Clearing any previous Clawd Desk server..."
+echo "🛑 Clearing any previous ClawdDesk server..."
 
 # Match the tsx process by its full command line. npm wraps tsx, so killing
 # npm's PID alone is unreliable. These patterns catch the child directly.
@@ -126,7 +126,7 @@ if lsof -ti:"$PORT" > /dev/null 2>&1; then
   echo "   PID: $holder"
   echo "   Command: $proc"
   echo ""
-  echo "   This isn't Clawd Desk. Kill it manually:"
+  echo "   This isn't ClawdDesk. Kill it manually:"
   echo "     lsof -i :$PORT          # find the culprit"
   echo "     kill -9 $holder         # stop it"
   pause_and_exit 1
@@ -147,7 +147,7 @@ if [ ! -d "node_modules" ]; then
   echo ""
 fi
 
-echo "🚀 Starting Clawd Desk on $URL..."
+echo "🚀 Starting ClawdDesk on $URL..."
 : > "$LOG"   # truncate log so we only see THIS run's output
 npm run serve > "$LOG" 2>&1 &
 SERVER_PID=$!
@@ -158,7 +158,7 @@ SERVER_PID=$!
 # -----------------------------------------------------------------------------
 cleanup() {
   echo ""
-  echo "🛑 Stopping Clawd Desk..."
+  echo "🛑 Stopping ClawdDesk..."
   # Kill the tail first so it doesn't keep the Terminal busy
   [ -n "${TAIL_PID:-}" ] && kill "$TAIL_PID" 2>/dev/null
   # Kill the server tree by pattern (reliable) and by port (belt-and-suspenders)
@@ -213,7 +213,7 @@ open "$URL"
 cat <<READY
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ✅ Clawd Desk is live at $URL
+  ✅ ClawdDesk is live at $URL
   Server logs streaming below. Ctrl-C (or close this window) to stop.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

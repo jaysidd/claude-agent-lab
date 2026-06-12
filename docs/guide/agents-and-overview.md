@@ -4,7 +4,7 @@
 
 ## What this is
 
-An agent is a named worker with its own personality, its own set of allowed tools, and its own default model. Clawd Desk ships four built-in agents and lets you spawn as many custom ones as you like. Each lives in the left sidebar, keeps its own conversation, and is one click away.
+An agent is a named worker with its own personality, its own set of allowed tools, and its own default model. ClawdDesk ships four built-in agents and lets you spawn as many custom ones as you like. Each lives in the left sidebar, keeps its own conversation, and is one click away.
 
 The four built-ins are:
 
