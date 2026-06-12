@@ -1,4 +1,4 @@
-# Clawd Desk — Sequential Backlog
+# ClawdDesk — Sequential Backlog
 
 > Last Updated: 2026-04-26 (C16 epic added — Phase 2: Autonomous Operations)
 > Total items: 19+ (7 foundation + 14 shipped + 1 active epic + future list)
@@ -229,7 +229,7 @@ Package the web UI + server as a desktop app. Electron is the easy path given th
 
 #### Goal
 
-Take Clawd Desk from "interactive lab" to "lab + small autonomous runtime." Make it possible to run a Paperclip-style agent firm (CEO + specialists, delegating via task comments, waking on schedule) directly on the SDK with the existing Max OAuth — without rebuilding Paperclip's whole platform.
+Take ClawdDesk from "interactive lab" to "lab + small autonomous runtime." Make it possible to run a Paperclip-style agent firm (CEO + specialists, delegating via task comments, waking on schedule) directly on the SDK with the existing Max OAuth — without rebuilding Paperclip's whole platform.
 
 #### Scope guard — what this is NOT
 
@@ -326,7 +326,7 @@ That's the full Paperclip demo, on the SDK, on Max OAuth, ~personal scale, no AP
 
 Lane split confirmed with Clawless agent on 2026-04-26 after sharing the C16 design:
 
-| Sub-feature | Clawless status | Action for Clawd Desk |
+| Sub-feature | Clawless status | Action for ClawdDesk |
 |---|---|---|
 | C16a Scheduler | **Shipped (B06)**, different runtime | Build ours; steal UX patterns from B06; OAuth-healthcheck novelty may flow back |
 | C16b Durable queue | **B54 has no SQLite design — adopting ours wholesale** | Draft schema + atomic-checkout SQL → send to Clawless → implement (we're the source of truth) |

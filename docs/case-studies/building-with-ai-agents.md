@@ -1,6 +1,6 @@
 # Building with AI Agents — Case Studies
 
-Running log of patterns, iteration loops, and decisions worth documenting as we build Clawd Desk. Written live during sessions, not retrospectively.
+Running log of patterns, iteration loops, and decisions worth documenting as we build ClawdDesk. Written live during sessions, not retrospectively.
 
 ---
 

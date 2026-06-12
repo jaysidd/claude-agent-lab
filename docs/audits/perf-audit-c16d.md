@@ -70,7 +70,7 @@ WHERE status IN (?)        → SCAN pending_approvals + USE TEMP B-TREE        �
 
 (The cold/empty case is faster on `IN` because there are zero rows so the scan completes immediately, while `=` still has to consult the partial-index B-tree. Once any historical rows exist, `IN` loses by an order of magnitude.)
 
-The killer is that **decided/expired/rejected rows accumulate forever** — there's no pruning policy (P6). A user who runs Clawd Desk against a production-marked cwd for a month will accumulate hundreds-to-thousands of decided rows, and every 5 s UI poll will scan them all. Without the fix, the poll latency grows linearly with the table; with the fix it's flat.
+The killer is that **decided/expired/rejected rows accumulate forever** — there's no pruning policy (P6). A user who runs ClawdDesk against a production-marked cwd for a month will accumulate hundreds-to-thousands of decided rows, and every 5 s UI poll will scan them all. Without the fix, the poll latency grows linearly with the table; with the fix it's flat.
 
 **Fixed in this audit** (`src/approvals.ts:308-318`):
 
@@ -220,7 +220,7 @@ Total: ~120 µs of SQL work per 5 s cycle. Two HTTP round-trips on `localhost` a
 - `state.agents.find((a) => a.id === task.assignedAgent)` — linear scan, was flagged in C16a R10. Carry-over.
 - `renderApprovalPanel` allocates ~10 DOM elements + a `JSON.stringify(approval.toolInput, null, 2)` (could be 0-64 KB; bounded by the 64 KB cap on the create() side).
 
-At 50 tasks + 5 pending approvals: estimated 2-5 ms render time. At 500 tasks: would matter. At Clawd Desk's personal scale (rarely > 20 tasks visible at once): invisible.
+At 50 tasks + 5 pending approvals: estimated 2-5 ms render time. At 500 tasks: would matter. At ClawdDesk's personal scale (rarely > 20 tasks visible at once): invisible.
 
 **Recommendation.** Defer. The `state.agents.find` -> Map lookup is a generic UI fix, not C16d-specific; if it lands as part of the carry-over from C16a R10, this gets fixed for free.
 

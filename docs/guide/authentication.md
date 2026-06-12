@@ -4,7 +4,7 @@
 
 ## What this is
 
-Clawd Desk never asks you to log in. It does not have accounts, billing, or a session of its own. Instead it inherits whatever credentials the Claude Agent SDK can find on your machine, and shows you which one it used.
+ClawdDesk never asks you to log in. It does not have accounts, billing, or a session of its own. Instead it inherits whatever credentials the Claude Agent SDK can find on your machine, and shows you which one it used.
 
 There are two practical ways to run it: an Anthropic API key, or your already-logged-in Claude Code CLI. This page explains how the SDK chooses between them, what the UI labels mean, and the one Terms-of-Service rule you need to know before turning this into anything you share.
 
@@ -32,7 +32,7 @@ The SDK resolves credentials in a strict order, and the first match wins:
 2. **Enterprise transports**, when `CLAUDE_CODE_USE_BEDROCK`, `CLAUDE_CODE_USE_VERTEX`, or `CLAUDE_CODE_USE_FOUNDRY` is set with the matching cloud credentials.
 3. **Your local Claude Code CLI OAuth session**, used only when none of the above are present.
 
-The SDK reports the result as `apiKeySource` on every response. A key resolves to `user`, `org`, or `project`. OAuth resolves to `none`. Clawd Desk reads that value and translates `none` into the friendly `🔐 Max plan · subscription` label. `apiKeySource: "none"` means OAuth is working, not that anything is broken.
+The SDK reports the result as `apiKeySource` on every response. A key resolves to `user`, `org`, or `project`. OAuth resolves to `none`. ClawdDesk reads that value and translates `none` into the friendly `🔐 Max plan · subscription` label. `apiKeySource: "none"` means OAuth is working, not that anything is broken.
 
 ## Common questions
 

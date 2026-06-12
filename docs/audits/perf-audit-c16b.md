@@ -79,11 +79,11 @@ const rows = this.db.prepare(sql).all(...params) as TaskRow[];
 
 **Observation:** better-sqlite3 caches prepared statements internally by SQL text. Every unique combination of `filter.status` count, `filter.agentId` presence, and `filter.limit` value produces a different SQL string and therefore a different cache entry. The `LIMIT` baked into the literal (`LIMIT ${Math.floor(filter.limit)}`) is the worst offender — every distinct numeric limit is a brand-new statement.
 
-**Cost on Clawd Desk:** Zero. The only host caller is `taskQueue.list()` with no arguments, producing exactly one SQL string. Cache entry count: 1.
+**Cost on ClawdDesk:** Zero. The only host caller is `taskQueue.list()` with no arguments, producing exactly one SQL string. Cache entry count: 1.
 
 **Cost on Clawless lift:** Potentially relevant. B54's per-agent serialization need (`is there an in-flight task for agent X`) will exercise `list({ status: 'checked_out', agentId })` on hot paths. The cache stays compact (one entry per `(status-cardinality, agentId-presence)` pair, with `limit` parameterized by the caller). Not a real problem, but worth knowing.
 
-**Recommendation:** No action for Clawd Desk. If Clawless ever dynamically varies `limit`, switch the limit to a bound parameter (`LIMIT ?` + `params.push(limit)`) — better-sqlite3 supports it. Cosmetic optimization at this scale. Maybe leave a comment near the `list()` body noting that callers should keep filter shapes stable for cache friendliness.
+**Recommendation:** No action for ClawdDesk. If Clawless ever dynamically varies `limit`, switch the limit to a bound parameter (`LIMIT ?` + `params.push(limit)`) — better-sqlite3 supports it. Cosmetic optimization at this scale. Maybe leave a comment near the `list()` body noting that callers should keep filter shapes stable for cache friendliness.
 
 ---
 

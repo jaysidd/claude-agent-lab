@@ -1,4 +1,4 @@
-# Clawd Desk — Architecture
+# ClawdDesk — Architecture
 
 > Last updated: 2026-04-23
 
@@ -6,7 +6,7 @@
 
 The SDK is not a chat API. It's the same agent loop Claude Code runs, exposed as a TypeScript function. You hand it a prompt + options and iterate over an async stream of events (`system.init`, `assistant`, `tool_use`, `tool_result`, `result`). Everything you see in Claude Code — tool use, plan mode, hooks, sub-agents, sessions — is available as an option on `query()`.
 
-Clawd Desk takes that raw primitive and wraps it in the thinnest possible UI layer. Express for HTTP, vanilla JS for the browser, zero build pipeline for the frontend. The SDK does the hard work; we render it.
+ClawdDesk takes that raw primitive and wraps it in the thinnest possible UI layer. Express for HTTP, vanilla JS for the browser, zero build pipeline for the frontend. The SDK does the hard work; we render it.
 
 ---
 
@@ -58,13 +58,13 @@ One OS process. No IPC, no WebSockets (yet), no secondary server. The `claude` b
 | `public/style.css` | Dark dashboard theme; markdown rendering; modal + popover + voice indicator styles | ~900 |
 | `public/app.js` | Frontend — agents, streaming chat with WAV-conversion mic, folder picker, @file + slash-command popovers, task board, memory + settings + agent + history modals, slash dispatcher, /think + /export + /plan, mic ⌥V shortcut, session usage chip, restore flow | ~1,100 |
 | `scripts/screenshot.mjs` | Playwright script that regenerates all 14 README screenshots | ~140 |
-| `scripts/launch-clawd-desk.command` | Move-safe Desktop launcher (auto-locates project via candidate list; pkill + lsof retries) | ~150 |
+| `scripts/launch-clawddesk.command` | Move-safe Desktop launcher (auto-locates project via candidate list; pkill + lsof retries) | ~150 |
 | `playwright.config.ts` | Two projects: `smoke` (offline) + `engine` (@engine-tagged, real SDK) | — |
 | `tests/smoke.spec.ts` | 7 offline UI tests | — |
 | `tests/features.spec.ts` | 14 offline feature tests (memory, slash, custom agents, settings, etc.) | — |
 | `tests/chat.spec.ts` | 2 @engine tests (streaming reply, task classifier) | — |
 
-Total hand-written: ~2,500 LOC across the whole project. By design. Everything the SDK gives us for free stays in the SDK.
+Total hand-written: ~18,500 LOC across the whole project. By design. Everything the SDK gives us for free stays in the SDK.
 
 ### Module dependency map
 

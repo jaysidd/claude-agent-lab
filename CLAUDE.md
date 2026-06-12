@@ -1,10 +1,10 @@
-# Clawd Desk — Claude Code Project Instructions
+# ClawdDesk — Claude Code Project Instructions
 
 ## What Is This Project
 
-Clawd Desk is a **personal learning lab + mini "command center" dashboard** built directly on the official Anthropic [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Not a wrapper. The SDK *is* the engine.
+ClawdDesk is a **personal learning lab + mini "command center" dashboard** built directly on the official Anthropic [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/overview). Not a wrapper. The SDK *is* the engine.
 
-It pairs a small Express server with a vanilla-JS browser UI to expose the SDK's agent loop in the most visible, hackable way possible. Multi-agent sidebar, per-agent system prompts + tools + models, session persistence, folder selection, `@file` autocomplete. Built in ~15 minutes on 2026-04-23 while evaluating whether the SDK could replace a months-old OpenClaw-based project (Clawless). Verdict: **different problem, different tool** — SDK is Claude-only, OpenClaw is multi-provider. Clawd Desk is the Claude-native side of that comparison, and a sandbox for exploring what the SDK makes easy.
+It pairs a small Express server with a vanilla-JS browser UI to expose the SDK's agent loop in the most visible, hackable way possible. Multi-agent sidebar, per-agent system prompts + tools + models, session persistence, folder selection, `@file` autocomplete. Built in ~15 minutes on 2026-04-23 while evaluating whether the SDK could replace a months-old OpenClaw-based project (Clawless). Verdict: **different problem, different tool** — SDK is Claude-only, OpenClaw is multi-provider. ClawdDesk is the Claude-native side of that comparison, and a sandbox for exploring what the SDK makes easy.
 
 ### Authentication model (critical)
 
@@ -65,7 +65,7 @@ Architect → Developer → Reviewer → QA → Performance Analyst → Security
 | **Performance Analyst** | After QA sign-off | Profiles hot paths, bundle size, latency, dead code |
 | **Security Analyst** | After Performance sign-off | Threat model; surface risks to the user explicitly |
 
-### Architect checks (Clawd Desk specific)
+### Architect checks (ClawdDesk specific)
 - Does it stay on the SDK — not wrap OpenClaw/OpenAI/etc.? (Multi-provider work belongs in Clawless, not here.)
 - Does it respect the SDK's mental model (agent loop, tool use, sessions), or fight it?
 - Is it the minimum that teaches the concept, or is it over-engineered?
@@ -115,7 +115,7 @@ When wrapping a session, spawn Performance Analyst and Security Analyst as backg
 - Claude-only. Opus / Sonnet / Haiku, via the official SDK.
 
 ### What we are NOT
-- **Not multi-provider.** If you want OpenAI/OpenRouter/Ollama, that's Clawless territory (OpenClaw engine). Clawd Desk stays Claude-only by design.
+- **Not multi-provider.** If you want OpenAI/OpenRouter/Ollama, that's Clawless territory (OpenClaw engine). ClawdDesk stays Claude-only by design.
 - Not a re-implementation of Claude Code. The SDK *is* Claude Code's loop exposed as a library.
 - Not commercial in its current auth form. Max-plan OAuth is personal-only.
 
@@ -238,7 +238,7 @@ clawddesk/
 - Package manager: `npm` (not bun — small project, no build pipeline).
 - Commits: early and often, never batch, with `Co-Authored-By` footer.
 - Don't reinvent what the SDK gives for free — use its `agents`, `hooks`, `resume`, `cwd`, `model`, etc.
-- **Don't confuse this with Clawless.** Clawless is the commercial multi-provider product; Clawd Desk is the Claude-only personal lab. Different goals, different constraints.
+- **Don't confuse this with Clawless.** Clawless is the commercial multi-provider product; ClawdDesk is the Claude-only personal lab. Different goals, different constraints.
 
 ---
 
@@ -248,7 +248,7 @@ clawddesk/
 - **Repo**: https://github.com/RBJGlobal/clawddesk (public, MIT)
 - **Pages site**: https://rbjglobal.github.io/clawddesk/ (auto-rebuilds on push)
 - **Tests**: 22 smoke (offline) + 2 @engine (real SDK) = 24 total, all green
-- **LOC**: ~2,500 hand-written across `src/`, `public/`, `tests/`, `scripts/`
+- **LOC**: ~18,500 hand-written across `src/`, `public/`, `tests/`, `scripts/`
 
 ### Foundation (all DONE)
 F1–F7: scaffold, multi-agent sidebar, per-agent prompts/tools/sessions, folder picker, `@file` autocomplete, model selector, auth+model footer.
@@ -274,7 +274,7 @@ F1–F7: scaffold, multi-agent sidebar, per-agent prompts/tools/sessions, folder
 
 ### Operational state
 - Server: `npm run serve` on `127.0.0.1:3333` (LAN-isolated)
-- Launcher: `~/Desktop/Clawd Desk.command` — auto-finds the project via candidate list (works whether it's at `~/Desktop/clawddesk` or `~/Documents/projects/clawddesk` etc.)
+- Launcher: `~/Desktop/ClawdDesk.command` — auto-finds the project via candidate list (works whether it's at `~/Desktop/clawddesk` or `~/Documents/projects/clawddesk` etc.)
 - WhisprDesk: integrated via Settings modal, model "base" downloaded, ⌥V toggles recording
 - Pages: auto-rebuilds within ~60 s of any push to `main`
 
