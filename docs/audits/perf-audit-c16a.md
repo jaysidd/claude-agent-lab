@@ -43,7 +43,7 @@ Microbench measured on this project's better-sqlite3 build (`:memory:` DB, 50 sc
 | Tick SELECT (50 schedules, 5 due) | 12.13 µs | 3.63 µs | **8.5 µs** |
 | Tick SELECT (0 due) | 7.59 µs | 0.27 µs (`tickStmt2.all` reused) | **7.3 µs** |
 
-**Cost on Command Center:**
+**Cost on Clawd Desk:**
 
 - **Tick path:** 1 prepare every 30 s = ~7 µs/30 s = ~0.23 µs/sec. Invisible.
 - **CRUD routes:** `pause()` calls `get()` + UPDATE + `get()` = 3 prepares = ~20 µs added per request. `update()` similar. `list()` = 1 prepare = ~7 µs added. All dwarfed by the HTTP round-trip.
@@ -92,7 +92,7 @@ The `WHERE enabled = 1` clause makes this a **partial index** — it does not co
 | 500 | 401 µs |
 | 5,000 | 3.83 ms |
 
-**Cost on Command Center:** Personal scale tops out at maybe 20-50 schedules realistically. At 50 the route returns in well under a millisecond. Not a problem.
+**Cost on Clawd Desk:** Personal scale tops out at maybe 20-50 schedules realistically. At 50 the route returns in well under a millisecond. Not a problem.
 
 **Cost boundary:** Crossing ~1,000 schedules is where this query stops being cheap (~800 µs and growing linearly). The boundary where it becomes user-visible (>10 ms) is around 12,000 rows. Personal scale will never reach this; the Clawless lift might if their B54 schedule fan-out is per-customer.
 
@@ -142,7 +142,7 @@ Option 1 is the right move at scale. Cheap, idempotent, doesn't affect the exist
 
 The route (`/api/cron/preview`) wraps this with an Express handler + JSON serialization, total ~150 µs server-side.
 
-**Cost on Command Center:** UI debounces cron-input keystrokes at 200 ms (`public/app.js:2472`). Even a fast typist won't generate more than ~5 previews/sec. Server cost: ~750 µs/sec at peak, or ~0.075% of one CPU. Invisible.
+**Cost on Clawd Desk:** UI debounces cron-input keystrokes at 200 ms (`public/app.js:2472`). Even a fast typist won't generate more than ~5 previews/sec. Server cost: ~750 µs/sec at peak, or ~0.075% of one CPU. Invisible.
 
 **Recommendation:** Accept. The 200 ms debounce is generous; the underlying cost is well below what a 100 ms debounce could surface as observable.
 

@@ -55,7 +55,7 @@ Changing the model clears the agent's session on purpose, so the new model start
 None functionally. `/think hard|fast|default` is an ergonomic alias over `/model opus|haiku|<default>`. Use whichever reads better to you.
 
 **Are these the same as Claude Code slash commands?**
-No. These are Command Center's own client-side commands for this dashboard. They are not the SDK's command system; they are UI conveniences layered on top.
+No. These are Clawd Desk's own client-side commands for this dashboard. They are not the SDK's command system; they are UI conveniences layered on top.
 
 ## Where to go next
 

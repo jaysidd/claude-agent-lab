@@ -2321,7 +2321,7 @@ function buildTelegramHelp(): string {
     .map((a) => `• /${a.id} — ${a.name} (${a.description})`)
     .join("\n");
   return [
-    "*Command Center bot*",
+    "*Clawd Desk bot*",
     "",
     "Send a plain message to chat with Main (the router).",
     "Or use a slash command to target a specific agent:",
@@ -2530,6 +2530,6 @@ app.post("/api/telegram/test", async (_req, res) => {
 const PORT = Number(process.env.PORT ?? 3333);
 const HOST = process.env.HOST ?? "127.0.0.1";
 app.listen(PORT, HOST, () => {
-  console.log(`Command Center running at http://${HOST}:${PORT}`);
+  console.log(`Clawd Desk running at http://${HOST}:${PORT}`);
   console.log(`  cwd: ${currentCwd}`);
 });

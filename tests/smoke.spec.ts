@@ -1,9 +1,9 @@
 import { test, expect } from "@playwright/test";
 
-test.describe("Command Center — smoke (no engine)", () => {
+test.describe("Clawd Desk — smoke (no engine)", () => {
   test("loads and shows the four agents", async ({ page }) => {
     await page.goto("/");
-    await expect(page).toHaveTitle(/Command Center/);
+    await expect(page).toHaveTitle(/Clawd Desk/);
 
     // All four agents render in the sidebar
     for (const name of ["Main", "Comms", "Content", "Ops"]) {

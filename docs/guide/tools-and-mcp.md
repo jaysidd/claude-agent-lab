@@ -4,7 +4,7 @@
 
 ## What this is
 
-Every agent in Command Center carries a tool allowlist: the exact set of capabilities it is allowed to use during a run. Tools are the verbs an agent can perform. One agent might only read files; another might search the web; another might delegate to other agents. The allowlist is scoped per agent, so each specialist gets exactly the reach it needs and nothing more.
+Every agent in Clawd Desk carries a tool allowlist: the exact set of capabilities it is allowed to use during a run. Tools are the verbs an agent can perform. One agent might only read files; another might search the web; another might delegate to other agents. The allowlist is scoped per agent, so each specialist gets exactly the reach it needs and nothing more.
 
 On top of that built-in set, you can connect **MCP servers**: external [Model Context Protocol](https://modelcontextprotocol.io) processes or endpoints that expose their own tools. When you attach an MCP server to an agent, its tools light up automatically the next time that agent runs.
 

@@ -4,7 +4,7 @@
 
 ## What this is
 
-The Telegram bridge lets you drive the same Command Center agents from your phone. You message a Telegram bot, the bot hands your text to an agent, and the agent's reply comes back as a Telegram message. It is the same agents, the same sessions, the same budget caps and approval gates as the web UI, just reachable from anywhere you have Telegram.
+The Telegram bridge lets you drive the same Clawd Desk agents from your phone. You message a Telegram bot, the bot hands your text to an agent, and the agent's reply comes back as a Telegram message. It is the same agents, the same sessions, the same budget caps and approval gates as the web UI, just reachable from anywhere you have Telegram.
 
 There is no public webhook and nothing exposed to the internet. The bridge uses long-polling, so your laptop reaches out to Telegram rather than the other way around.
 
@@ -20,7 +20,7 @@ https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates
 
 In the JSON response, find `message.chat.id`. That number is your chat ID.
 
-**3. Wire it into Command Center.** Open ⚙️ **Settings** → **Telegram bridge**. Paste the bot token and your chat ID into the allowlist, then save. The listener restarts live, no server bounce. The bot's status appears in Settings so you can confirm it connected.
+**3. Wire it into Clawd Desk.** Open ⚙️ **Settings** → **Telegram bridge**. Paste the bot token and your chat ID into the allowlist, then save. The listener restarts live, no server bounce. The bot's status appears in Settings so you can confirm it connected.
 
 **Talking to agents.** Once it is running:
 
@@ -67,4 +67,4 @@ The CostGuard preflight catches it before the SDK call and the bot replies with 
 
 - [Tools and MCP Servers](./tools-and-mcp.md), the capabilities the agents you message can use.
 - [Skills](./skills.md), package whole jobs your phone-driven agents can run.
-- [Voice (WhisprDesk)](./voice.md), the other hands-free way into Command Center.
+- [Voice (WhisprDesk)](./voice.md), the other hands-free way into Clawd Desk.

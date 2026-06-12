@@ -4,7 +4,7 @@
 
 ## What this is
 
-Command Center is a small, hackable multi-agent dashboard built directly on Anthropic's official Claude Agent SDK. It pairs a tiny Express server with a vanilla-JS browser UI so you can chat with several Claude agents, each with its own system prompt, tool allowlist, and model.
+Clawd Desk is a small, hackable multi-agent dashboard built directly on Anthropic's official Claude Agent SDK. It pairs a tiny Express server with a vanilla-JS browser UI so you can chat with several Claude agents, each with its own system prompt, tool allowlist, and model.
 
 Everything runs on your own machine. The server binds to `127.0.0.1:3333` only, so it never listens on your LAN, and nothing is relayed through any hosted service. Your conversations, memory, and settings live on disk in a local SQLite file (`data/lab.db`), which is gitignored.
 
@@ -15,8 +15,8 @@ This page gets you from a fresh clone to your first agent reply.
 **1. Clone and install.**
 
 ```bash
-git clone https://github.com/jaysidd/claude-agent-lab.git
-cd claude-agent-lab
+git clone https://github.com/RBJGlobal/clawddesk.git
+cd clawddesk
 npm install
 ```
 
@@ -57,15 +57,15 @@ Type in the composer at the bottom and press Enter. The reply streams in token b
 The repo ships a double-clickable launcher. Copy it to your Desktop:
 
 ```bash
-cp scripts/launch-command-center.command "$HOME/Desktop/Command Center.command"
-chmod +x "$HOME/Desktop/Command Center.command"
+cp scripts/launch-clawd-desk.command "$HOME/Desktop/Clawd Desk.command"
+chmod +x "$HOME/Desktop/Clawd Desk.command"
 ```
 
 Double-clicking it kills any previous server on :3333, runs `npm install` if needed, starts the server, waits for it to be ready, and opens your browser. On the first launch, macOS Gatekeeper may block the unsigned script, so right-click the icon, choose **Open**, and confirm once. After that it launches cleanly. The script respects a `COMMAND_CENTER_DIR` env var if your clone lives somewhere unusual.
 
 ## How it works
 
-The whole app is one Node process: Express on port 3333 hands each chat to the SDK's `query()` call and renders the async stream of events back to the browser. There is no build step (the frontend is plain HTML, CSS, and JS) and no separate renderer. The SDK does the heavy lifting; Command Center is the thin, readable layer on top.
+The whole app is one Node process: Express on port 3333 hands each chat to the SDK's `query()` call and renders the async stream of events back to the browser. There is no build step (the frontend is plain HTML, CSS, and JS) and no separate renderer. The SDK does the heavy lifting; Clawd Desk is the thin, readable layer on top.
 
 ## Common questions
 

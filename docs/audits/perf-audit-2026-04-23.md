@@ -1,4 +1,4 @@
-# Command Center — Performance Audit (2026-04-23)
+# Clawd Desk — Performance Audit (2026-04-23)
 
 ## Headline
 

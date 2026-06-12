@@ -56,7 +56,7 @@ This is six **literal origins**. Playwright's `--blocked-origins` is **origin-pa
 
 - `http://10.0.0.1/`, `http://192.168.1.1/` (router admin), `http://172.16.0.1/` — reachable
 - `http://169.254.169.254/...` cloud metadata — the literal `http://169.254.169.254` is in the floor, but `https://169.254.169.254`, a port variant, or the IPv4-mapped form (S2) is not
-- `http://127.0.0.1:3333/` — the local Command Center server itself; `http://localhost`/`http://127.0.0.1` are floored, but the trailing-dot and IPv6-mapped forms (S2/S3) are not
+- `http://127.0.0.1:3333/` — the local Clawd Desk server itself; `http://localhost`/`http://127.0.0.1` are floored, but the trailing-dot and IPv6-mapped forms (S2/S3) are not
 
 This is the dominant finding: the IP-aware floor (`isUrlAllowed`) is wired to a single tool name, while the actual navigation surface (clicks, redirects, in-page JS) is much wider. The hook is necessary but cannot be the floor by itself.
 
@@ -95,7 +95,7 @@ The IPv4-mapped metadata bypass (`[::ffff:a9fe:a9fe]` → 169.254.169.254) is th
 
 Two more gate-logic bypasses, ranked below the IPv4-mapped set because whether Chromium **connects** them is OS/resolver-dependent (not deterministic like an embedded IPv4):
 
-- **`http://[::]/`** → hostname `::` after bracket-strip. `toIPv4` null (has `:`); IPv6 branch matches only `fc/fd/fe8-b`, so `::` falls through → **ALLOWED**. `::` is the IPv6 unspecified address; on many stacks a client connecting to `[::]` reaches a loopback-bound listener (analogous to `0.0.0.0`, which the floor *does* deny). Whether it connects to the local Command Center server is stack-dependent.
+- **`http://[::]/`** → hostname `::` after bracket-strip. `toIPv4` null (has `:`); IPv6 branch matches only `fc/fd/fe8-b`, so `::` falls through → **ALLOWED**. `::` is the IPv6 unspecified address; on many stacks a client connecting to `[::]` reaches a loopback-bound listener (analogous to `0.0.0.0`, which the floor *does* deny). Whether it connects to the local Clawd Desk server is stack-dependent.
 - **`http://localhost./`** → hostname `localhost.` (trailing dot preserved by Node). `=== "localhost"` is false; `.endsWith(".localhost")` is false; `DENY_HOSTNAMES` has no `localhost.` → **ALLOWED**. Most resolvers treat `localhost.` as `localhost`. (Note: `127.0.0.1.` *is* caught — Node strips the trailing dot from IP-literals and `hostMatchesDomain`/`toIPv4` see `127.0.0.1`. The hole is specifically the named `localhost.`.)
 
 **Recommendation:** fold into the S2 fix — in the IPv6 branch, deny `::` and `::1` defensively (the unspecified + loopback addresses); in the hostname floor, strip a single trailing dot before the `localhost` comparisons (`hostname.replace(/\.$/, "")`). Cheap and removes the ambiguity even if the connect-behavior is uncertain.

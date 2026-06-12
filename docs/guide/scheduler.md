@@ -39,7 +39,7 @@ All of this state lives in SQLite, so schedules, their pause reasons, and their 
 A scheduled run produces output — and now you can decide where it lands. When you create a schedule, pick a **destination**:
 
 - **In-app (run history only)** — the default. The output is kept in this schedule's run history (see below); nothing leaves the app.
-- **Append to a file** — name a file like `digest.md` and each run appends its output (with a timestamp header) to that file. The file lives **under `~/.claude-agent-lab/reports/`** — you name a file inside that folder, you can't point it at an arbitrary path. (More on why below.)
+- **Append to a file** — name a file like `digest.md` and each run appends its output (with a timestamp header) to that file. The file lives **under `~/.clawddesk/reports/`** — you name a file inside that folder, you can't point it at an arbitrary path. (More on why below.)
 - **Telegram** — if you've configured the [Telegram bridge](telegram-bridge.md), the run's output is sent to a chat id you specify.
 
 Every schedule keeps a **run history**: click **History** on a schedule card to see its past runs, each with its status (success / error / budget), timestamp, delivery result, and the full output transcript. The most recent runs are kept (older ones roll off), so a frequent schedule won't grow the database without bound.
@@ -50,7 +50,7 @@ Run outcome and delivery outcome are tracked separately: if the agent run succee
 
 A scheduled run is **unattended**, and an agent's output can include content it read from the web (if it has [browser automation](browser-automation.md) on). Writing that output to a file you chose is fine for a data file, but it would be dangerous if the file were something that gets *interpreted later* — a shell startup file, an SSH config, a `SKILL.md`. A malicious web page could try to steer the output into one of those.
 
-So file destinations are confined to `~/.claude-agent-lab/reports/` with the same path floor used elsewhere in the app: you choose a name inside that folder, and `../`, absolute paths, and escapes are rejected. "Write my daily digest to `news.md`" works exactly as you'd expect; "append to `~/.zshrc`" is simply not possible.
+So file destinations are confined to `~/.clawddesk/reports/` with the same path floor used elsewhere in the app: you choose a name inside that folder, and `../`, absolute paths, and escapes are rejected. "Write my daily digest to `news.md`" works exactly as you'd expect; "append to `~/.zshrc`" is simply not possible.
 
 ## Common questions
 

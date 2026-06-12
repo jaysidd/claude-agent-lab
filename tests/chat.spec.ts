@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 
-test.describe("Command Center — chat against real SDK @engine", () => {
+test.describe("Clawd Desk — chat against real SDK @engine", () => {
   test.setTimeout(120_000);
 
   test("sending a message to Main yields a streaming reply @engine", async ({ page }) => {

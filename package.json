@@ -1,7 +1,7 @@
 {
-  "name": "claude-agent-lab",
+  "name": "clawddesk",
   "version": "1.0.0",
-  "description": "",
+  "description": "Clawd Desk — a personal, local-only multi-agent command desk built on the Claude Agent SDK.",
   "main": "index.js",
   "scripts": {
     "start": "tsx src/server.ts",

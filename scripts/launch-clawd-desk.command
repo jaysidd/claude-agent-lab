@@ -1,10 +1,10 @@
 #!/bin/bash
-# Command Center — double-click launcher (macOS)
+# Clawd Desk — double-click launcher (macOS)
 #
 # Flow:
 #   1. Kill any prior instance, both by command-pattern AND by port :3333
 #   2. Wait until port is actually free (retry kill up to 6 times)
-#   3. Start `npm run serve` writing to /tmp/command-center-<port>.log
+#   3. Start `npm run serve` writing to /tmp/clawddesk-<port>.log
 #   4. Poll /api/cwd for up to ~15s until it responds
 #   5. Open the browser ONLY after readiness is confirmed
 #   6. Tail the log in this window; Ctrl-C or close cleans up everything
@@ -15,23 +15,23 @@
 
 PORT="${PORT:-3333}"
 URL="http://localhost:$PORT"
-LOG="/tmp/command-center-$PORT.log"
+LOG="/tmp/clawddesk-$PORT.log"
 
 # -----------------------------------------------------------------------------
 # Resolve the project folder. Preference order:
-#   1. COMMAND_CENTER_DIR env var (explicit override)
+#   1. CLAWDDESK_DIR env var (explicit override)
 #   2. Parent of this script (works when the launcher lives in the repo's
 #      own scripts/ folder — auto-follows the project wherever it moves)
 #   3. Common locations on disk (for the standalone Desktop copy)
 # -----------------------------------------------------------------------------
 is_lab_dir() {
-  [ -f "$1/package.json" ] && grep -q '"claude-agent-lab"' "$1/package.json" 2>/dev/null
+  [ -f "$1/package.json" ] && grep -q '"clawddesk"' "$1/package.json" 2>/dev/null
 }
 
 PROJECT_DIR=""
 
-if [ -n "${COMMAND_CENTER_DIR:-}" ]; then
-  PROJECT_DIR="$COMMAND_CENTER_DIR"
+if [ -n "${CLAWDDESK_DIR:-}" ]; then
+  PROJECT_DIR="$CLAWDDESK_DIR"
 else
   # Option 2 — if this script is inside "<project>/scripts/", its parent IS the project
   SCRIPT_PATH="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,13 +42,13 @@ else
   # Option 3 — search common parents
   if [ -z "$PROJECT_DIR" ]; then
     for candidate in \
-      "$HOME/Documents/projects/claude-agent-lab" \
-      "$HOME/Documents/claude-agent-lab" \
-      "$HOME/Projects/claude-agent-lab" \
-      "$HOME/projects/claude-agent-lab" \
-      "$HOME/code/claude-agent-lab" \
-      "$HOME/src/claude-agent-lab" \
-      "$HOME/Desktop/claude-agent-lab"; do
+      "$HOME/Documents/projects/clawddesk" \
+      "$HOME/Documents/clawddesk" \
+      "$HOME/Projects/clawddesk" \
+      "$HOME/projects/clawddesk" \
+      "$HOME/code/clawddesk" \
+      "$HOME/src/clawddesk" \
+      "$HOME/Desktop/clawddesk"; do
       if is_lab_dir "$candidate"; then
         PROJECT_DIR="$candidate"
         break
@@ -57,11 +57,11 @@ else
   fi
 fi
 
-printf "\033]0;Command Center\a"  # Terminal title
+printf "\033]0;Clawd Desk\a"  # Terminal title
 
 cat <<BANNER
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Command Center — launcher
+  Clawd Desk — launcher
   $PROJECT_DIR
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -75,21 +75,21 @@ pause_and_exit() {
 }
 
 if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
-  echo "❌ Could not find the claude-agent-lab project folder."
+  echo "❌ Could not find the clawddesk project folder."
   echo ""
   echo "Searched:"
-  echo "  \$COMMAND_CENTER_DIR env var — ${COMMAND_CENTER_DIR:-(not set)}"
-  echo "  ~/Documents/projects/claude-agent-lab"
-  echo "  ~/Documents/claude-agent-lab"
-  echo "  ~/Projects/claude-agent-lab"
-  echo "  ~/projects/claude-agent-lab"
-  echo "  ~/code/claude-agent-lab"
-  echo "  ~/src/claude-agent-lab"
-  echo "  ~/Desktop/claude-agent-lab"
+  echo "  \$CLAWDDESK_DIR env var — ${CLAWDDESK_DIR:-(not set)}"
+  echo "  ~/Documents/projects/clawddesk"
+  echo "  ~/Documents/clawddesk"
+  echo "  ~/Projects/clawddesk"
+  echo "  ~/projects/clawddesk"
+  echo "  ~/code/clawddesk"
+  echo "  ~/src/clawddesk"
+  echo "  ~/Desktop/clawddesk"
   echo ""
   echo "Fix: set the env var before launching, e.g."
-  echo "  COMMAND_CENTER_DIR=/full/path/to/claude-agent-lab \\"
-  echo "    open 'Command Center.command'"
+  echo "  CLAWDDESK_DIR=/full/path/to/clawddesk \\"
+  echo "    open 'Clawd Desk.command'"
   echo ""
   echo "Or edit the candidate list near the top of this file."
   pause_and_exit 1
@@ -100,11 +100,11 @@ cd "$PROJECT_DIR" || pause_and_exit 1
 # -----------------------------------------------------------------------------
 # Step 1 & 2 — aggressive kill of prior instance, then wait for port to free
 # -----------------------------------------------------------------------------
-echo "🛑 Clearing any previous Command Center server..."
+echo "🛑 Clearing any previous Clawd Desk server..."
 
 # Match the tsx process by its full command line. npm wraps tsx, so killing
 # npm's PID alone is unreliable. These patterns catch the child directly.
-pkill -f "claude-agent-lab.*src/server.ts" 2>/dev/null
+pkill -f "clawddesk.*src/server.ts" 2>/dev/null
 pkill -f "tsx[^a-z].*src/server\.ts" 2>/dev/null
 
 # Also kill whatever's currently holding the port, retrying up to 6 times
@@ -126,7 +126,7 @@ if lsof -ti:"$PORT" > /dev/null 2>&1; then
   echo "   PID: $holder"
   echo "   Command: $proc"
   echo ""
-  echo "   This isn't Command Center. Kill it manually:"
+  echo "   This isn't Clawd Desk. Kill it manually:"
   echo "     lsof -i :$PORT          # find the culprit"
   echo "     kill -9 $holder         # stop it"
   pause_and_exit 1
@@ -147,7 +147,7 @@ if [ ! -d "node_modules" ]; then
   echo ""
 fi
 
-echo "🚀 Starting Command Center on $URL..."
+echo "🚀 Starting Clawd Desk on $URL..."
 : > "$LOG"   # truncate log so we only see THIS run's output
 npm run serve > "$LOG" 2>&1 &
 SERVER_PID=$!
@@ -158,11 +158,11 @@ SERVER_PID=$!
 # -----------------------------------------------------------------------------
 cleanup() {
   echo ""
-  echo "🛑 Stopping Command Center..."
+  echo "🛑 Stopping Clawd Desk..."
   # Kill the tail first so it doesn't keep the Terminal busy
   [ -n "${TAIL_PID:-}" ] && kill "$TAIL_PID" 2>/dev/null
   # Kill the server tree by pattern (reliable) and by port (belt-and-suspenders)
-  pkill -f "claude-agent-lab.*src/server.ts" 2>/dev/null
+  pkill -f "clawddesk.*src/server.ts" 2>/dev/null
   pkill -f "tsx[^a-z].*src/server\.ts" 2>/dev/null
   lsof -ti:"$PORT" | xargs kill -9 2>/dev/null
   exit 0
@@ -213,7 +213,7 @@ open "$URL"
 cat <<READY
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  ✅ Command Center is live at $URL
+  ✅ Clawd Desk is live at $URL
   Server logs streaming below. Ctrl-C (or close this window) to stop.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

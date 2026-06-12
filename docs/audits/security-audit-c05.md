@@ -115,7 +115,7 @@ The only place the response payload reaches dangerous territory is `msg.text` fl
 Clean for the JSON-parsing-as-code class. The prompt-injection class is covered by S3.
 
 ### S10 — Two-instance conflict semantics
-`src/telegram.ts:351-359`: a 409 Conflict from Telegram flips status to `conflict`, logs, and stops the loop. Telegram's own server enforces at-most-one long-poll connection per token, so a second Command Center instance (e.g., the operator running the dev server on their laptop while a production bot polls from a server) gets the 409 and exits.
+`src/telegram.ts:351-359`: a 409 Conflict from Telegram flips status to `conflict`, logs, and stops the loop. Telegram's own server enforces at-most-one long-poll connection per token, so a second Clawd Desk instance (e.g., the operator running the dev server on their laptop while a production bot polls from a server) gets the 409 and exits.
 
 The interaction with `getUpdates`'s `offset` is also clean: each `getUpdates` call carries its own `offset`, which Telegram uses to mark messages as acknowledged. If two instances were somehow racing (they can't, due to the 409), both would see the same updates initially, and whichever ack'd first would shift Telegram's pointer past those messages. Worst case: a brief window where messages might be processed twice — but the SDK's session tracking would treat them as separate prompts in the same session, which is operator-visible (they'd see the duplicate replies in their DM) but not security-relevant.
 

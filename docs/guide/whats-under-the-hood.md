@@ -4,7 +4,7 @@
 
 ## What this is
 
-Command Center is not a wrapper around Claude. The Claude Agent SDK *is* the engine, and this app is the thinnest possible UI on top of it.
+Clawd Desk is not a wrapper around Claude. The Claude Agent SDK *is* the engine, and this app is the thinnest possible UI on top of it.
 
 The SDK is the same agent loop that powers the Claude Code CLI, exposed as a TypeScript library. You hand it a prompt plus a set of options, and you iterate over an async stream of events: session init, assistant text, tool calls, tool results, and a final result. Tool use, plan mode, hooks, sub-agents, sessions, all of it is reachable as an option on one function call. The engine that used to take weeks to build collapses to a function call when Claude is the target model.
 
@@ -29,7 +29,7 @@ Everything meant to survive a restart lives in **SQLite at `data/lab.db`**: pers
 ## Common questions
 
 **Is this a fork of Claude Code?**
-No. It uses the Claude Agent SDK, which is Claude Code's loop published as a library. Command Center just renders that loop in a browser.
+No. It uses the Claude Agent SDK, which is Claude Code's loop published as a library. Clawd Desk just renders that loop in a browser.
 
 **Why one process instead of a client plus a server, or Electron?**
 Simplicity. The SDK already has filesystem access through its tools, so there is no need for a native shell. One Express process is the least surprising thing that works.
@@ -41,7 +41,7 @@ Only the agent's own calls to Anthropic. The server is localhost-only and all du
 Only the in-memory pointers: live session resume, the active model override, and the current folder. Your memory, tasks, conversation history, settings, and custom agents are in SQLite and come back exactly as you left them.
 
 **Is this multi-provider?**
-No. Command Center is Claude-only by design. If you need OpenAI, Ollama, or local models, that is a different tool.
+No. Clawd Desk is Claude-only by design. If you need OpenAI, Ollama, or local models, that is a different tool.
 
 ## Where to go next
 

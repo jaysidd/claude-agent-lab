@@ -4136,7 +4136,7 @@ function insertTextIntoComposer(text) {
 }
 
 // Passive SSE listener: if the user dictates anywhere in WhisprDesk while
-// the Command Center tab is focused, append the text to the composer.
+// the Clawd Desk tab is focused, append the text to the composer.
 let whisprdeskEvents = null;
 function subscribeToWhisprDeskEvents() {
   if (whisprdeskEvents) return;

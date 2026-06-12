@@ -1,14 +1,14 @@
 # Per-task approval gates vs per-tool approval — analysis
 
 > Date: 2026-04-29
-> Status: shipped C16d in Command Center; portability decision = **partial — see verdict**
+> Status: shipped C16d in Clawd Desk; portability decision = **partial — see verdict**
 > Cross-references: `src/approvals.ts`, `.notes/c16d-approval-gates-design.md`,
 > Clawless's existing per-tool approval (Strict / Standard / Permissive profiles
 > + Allow Once / Allow Always / Deny prompts at the OpenClaw permission layer)
 
 ## What we built
 
-Command Center's C16d adds approval gates at the **task layer**: a task is marked `requiresApproval: true` (or its `cwd` matches a production-marked allowlist), and the SDK's `PreToolUse` hook awaits an external `/api/approvals/:id/decide` call before any dangerous tool fires (Bash / Write / Edit / WebFetch by default; ALL tools when production-marked). The hook genuinely pauses the SDK loop via `Promise<HookJSONOutput>` — no polling, no replay.
+Clawd Desk's C16d adds approval gates at the **task layer**: a task is marked `requiresApproval: true` (or its `cwd` matches a production-marked allowlist), and the SDK's `PreToolUse` hook awaits an external `/api/approvals/:id/decide` call before any dangerous tool fires (Bash / Write / Edit / WebFetch by default; ALL tools when production-marked). The hook genuinely pauses the SDK loop via `Promise<HookJSONOutput>` — no polling, no replay.
 
 Clawless's existing approval layer is at the **tool layer**: each tool call surfaces an Allow Once / Allow Always / Deny prompt to the user, with permission profiles (Strict / Standard / Permissive) controlling defaults. The decision is per-call, anchored to a tool name + matcher pattern.
 
@@ -96,9 +96,9 @@ The non-portable surface is:
 
 We do NOT recommend porting `src/approvals.ts` as a parallel approval system on top of OpenClaw. The implementation cost is high and the wins (cases 2 and 4) can be retrofitted into the existing per-tool layer at lower cost.
 
-## Implications for Command Center
+## Implications for Clawd Desk
 
-C16d still ships in Command Center because it's the right shape **here**:
+C16d still ships in Clawd Desk because it's the right shape **here**:
 
 - We're at the SDK harness layer where `PreToolUse` is first-class.
 - The kanban already presents tasks as units, so per-task approval cards fit the existing UI without inventing a new surface.

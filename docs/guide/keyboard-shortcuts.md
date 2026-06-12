@@ -4,7 +4,7 @@
 
 ## What this is
 
-Command Center has a small set of keyboard shortcuts so you can move around without reaching for the mouse. At the center is the ⌘K command palette, a fuzzy-filter list of every modal, action, and agent. Around it sit a handful of direct shortcuts for the modals you open most, plus a voice toggle.
+Clawd Desk has a small set of keyboard shortcuts so you can move around without reaching for the mouse. At the center is the ⌘K command palette, a fuzzy-filter list of every modal, action, and agent. Around it sit a handful of direct shortcuts for the modals you open most, plus a voice toggle.
 
 ## How to use it
 

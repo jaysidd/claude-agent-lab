@@ -1,6 +1,6 @@
-# Command Center — User Guide
+# Clawd Desk — User Guide
 
-A friendly, task-oriented guide to every surface in Command Center. If the
+A friendly, task-oriented guide to every surface in Clawd Desk. If the
 [main README](../../README.md) is the "what and why," this is the "how do I
 actually use it."
 
@@ -64,7 +64,7 @@ How agents do real work, and how you extend them.
 ## Automation, queue, and safety
 
 Run agents unattended, on a schedule, within guardrails. This is the
-"Autonomous Agent Firm" and it is Command Center's richest differentiator.
+"Autonomous Agent Firm" and it is Clawd Desk's richest differentiator.
 
 | Page | What it covers |
 |---|---|
@@ -85,6 +85,6 @@ The flat lists you look things up in.
 
 ---
 
-This guide is hand-written Markdown, the same as Command Center itself. Found
+This guide is hand-written Markdown, the same as Clawd Desk itself. Found
 something wrong or out of date? It is just files in [`docs/guide/`](.), so a
 one-line fix and a pull request is all it takes.

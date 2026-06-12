@@ -309,6 +309,6 @@ Scratch benchmark file written to project root (`tmp-bench-c05.mjs`) and removed
 - LOW: 6 (one defer, six accept)
 - **Ship after the inline P1 typing-loop fix lands with the rest of C05.**
 
-The bridge implementation is shaped well: standalone primitive with clean stop semantics, abort-aware fetch chain, exponential backoff capped at a reasonable ceiling, paragraph-aware chunking, fail-safe markdown fallback. The one user-visible perf bug — typing-loop sleep blocking the reply by up to 4 s — is now closed inline. Everything else is on the watch list for scale or operational shapes that don't apply to personal-tier Command Center.
+The bridge implementation is shaped well: standalone primitive with clean stop semantics, abort-aware fetch chain, exponential backoff capped at a reasonable ceiling, paragraph-aware chunking, fail-safe markdown fallback. The one user-visible perf bug — typing-loop sleep blocking the reply by up to 4 s — is now closed inline. Everything else is on the watch list for scale or operational shapes that don't apply to personal-tier Clawd Desk.
 
 Inline change: `src/server.ts:1740-1760` (typing loop made wake-able) and `src/server.ts:1799-1803` (finally block calls `wakeTypingLoop()`). No other files touched.

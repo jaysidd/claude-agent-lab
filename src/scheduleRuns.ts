@@ -10,7 +10,7 @@
 // automation its output can contain content the agent fetched from the web. So
 // writing that output to a file is a write-side egress of attacker-influenceable
 // content — NOT analogous to reading an operator-chosen pin. We therefore CONFINE
-// file output to a dedicated reports dir (~/.claude-agent-lab/reports) with the
+// file output to a dedicated reports dir (~/.clawddesk/reports) with the
 // same resolve + prefix-check floor used by skillInstall.ts / browser.ts. The
 // operator picks a filename, never an arbitrary path — so a malicious page can't
 // steer output into ~/.zshrc, ~/.ssh, .mcp.json, a SKILL.md, or a crontab and get
@@ -57,7 +57,7 @@ db.exec(`
 
 // Confinement root for `file` destinations. Operators name a file under here;
 // they can never write outside it.
-export const REPORTS_ROOT = path.join(os.homedir(), ".claude-agent-lab", "reports");
+export const REPORTS_ROOT = path.join(os.homedir(), ".clawddesk", "reports");
 
 // Per-schedule run retention. A per-minute schedule would otherwise grow the
 // table forever; we keep the most recent N rows per schedule.
